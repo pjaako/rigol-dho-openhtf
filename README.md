@@ -139,12 +139,31 @@ Sequence: `:REC:WREC:ENAB ON`, `:REC:WREC:FRAM n`, `:REC:WREC:FINT seconds`, `:R
   (1000 points, 8 bit). MAX mode returns no data during replay.
 - For a series at full memory depth, loop `single()` / wait for `STOP` / `read_waveform(mode='RAW')` instead.
 
-## Prior art checked
+## Other projects, run against the same scope (2026-09-27)
 
-[pydho800](https://github.com/MasterJubei/pydho800) (BSD-3, LAN only, ASCII waveform transfer),
-[rigol-dho-scpi](https://github.com/sendu2wfdx/rigol-dho-scpi) (no licence),
-[TofuPilot's PyVISA + OpenHTF guide](https://www.tofupilot.com/guides/getting-started-with-pyvisa-control-test-instruments-from-python).
-No OpenHTF plug for this scope family existed. Transport and IEEE-488.2 block parsing come from PyVISA.
+All five were read first (no shell calls, no foreign hosts), then run over Ethernet at 100 Mbit/s; ours runs
+over USB with a fresh preamble on every read. Times are for one waveform of channel 1.
+
+| Project | Transport, format | Screen (1000 pts) | Memory 1 M | Memory 10 M |
+|---|---|---|---|---|
+| this plug | USB, WORD, volts + time | 51 ms | 0.35 s | 1.9 s |
+| [rigol-dho-scpi](https://github.com/sendu2wfdx/rigol-dho-scpi) | raw socket, WORD, bytes only | 27 ms | 0.32 s | 2.6 s |
+| [rigol-dho-mcp](https://github.com/mattjax16/rigol-dho-mcp) | raw socket, BYTE, 250k chunks | 113 ms | 0.48 s | 4.3 s |
+| [labmcp-rigol-scope](https://pypi.org/project/labmcp-rigol-scope/) | raw socket, BYTE, chunks | 216 ms | 0.74 s | 5.5 s |
+| [pydho800](https://github.com/MasterJubei/pydho800) | raw socket, ASCII | 119 ms | 3.4 s | 36 s |
+| [rigol-rc](https://github.com/y0v1737/rigol-rc) | VXI-11, WORD, per-sample `struct` loop | 90 ms | 15 s | > 150 s |
+
+- Nothing beats USB + one binary read. The only faster number, rigol-dho-scpi's 27 ms, is a bare
+  `:WAV:DATA?` with no preamble and no conversion; the plug does the same in 24 ms with `preamble=` reuse.
+- The one transferable trick: a plain TCP socket with `TCP_NODELAY` and large `recv` is ~10 % faster than
+  PyVISA's socket resource on 10 M points (2.6 s vs 2.95 s). Not worth a second transport implementation.
+- rigol-dho-scpi loses sync when a connection is reused: it leaves the newline after a binary block unread.
+- **Recorded frames:** none of the projects implements record/replay, and with frames selected by
+  `:REC:WREP:FCUR` all five behave like the plug: screen reads follow the frame, memory (RAW) reads return
+  the same record for every frame. It is the scope's behaviour, not a client bug. UltraAcquire
+  (`:ACQ:TYPE ULTR`) offers no frame read-out commands either.
+- Also checked: [TofuPilot's PyVISA + OpenHTF guide](https://www.tofupilot.com/guides/getting-started-with-pyvisa-control-test-instruments-from-python)
+  for the plug pattern. No OpenHTF plug for this scope family existed.
 
 ## Files
 
