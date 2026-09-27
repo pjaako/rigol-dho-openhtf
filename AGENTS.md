@@ -9,3 +9,5 @@ OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 - `SPEC.md` is the original contract; where it disagrees with `README.md` ("Things the manual does not tell you"), README wins: it records what the real scope does.
 - Everything must run without hardware: `bench_usb.py --fake`, `example_test.py --fake`, `pytest -q`.
 - Validate conversions against a known signal (probe-compensation output, compare with `:MEAS:ITEM? VTOP/VBAS/VPP`) and reject clipped captures. A conclusion drawn from clipped data ("the manual's formula is wrong") cost one wrong release of this plug.
+- Samples are always 16-bit: `read_waveform` defaults to `fmt='WORD'`; do not switch code to BYTE to save time or space.
+- To save memory and disk keep `Waveform.raw` (uint16) plus `Waveform.preamble`; do not store the float64 `t`/`v` arrays, recompute them (formulas in README).

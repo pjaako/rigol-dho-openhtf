@@ -10,7 +10,7 @@ from rigol_dho_plug import RigolDhoPlug
 @htf.measures(htf.Measurement('vpp'))
 @htf.plug(scope=RigolDhoPlug)
 def phase(test, scope):
-    w = scope.read_waveform(1)              # screen data, 1000 points, volts in w.v, seconds in w.t
+    w = scope.read_waveform(1)              # screen data, 1000 points, 16-bit; volts in w.v, seconds in w.t
     test.measurements.vpp = float(w.v.max() - w.v.min())
 ```
 
@@ -46,10 +46,35 @@ config key `rigol_dho_resource`, e.g. `TCPIP::192.168.1.50::INSTR`.
 | `read_waveform` RAW WORD | 25 000 000 | 4.03 s | 6.2 Mpts/s, 11.8 MiB/s |
 | RAW BYTE in 250k-point chunks | 25 000 000 | 7.21 s | 3.5 Mpts/s |
 
-Two limits: a floor of ~24 ms per query and a ceiling of ~10–12 MiB/s. Read the whole record in one
-query (`chunk_points=None`, the default); chunking only adds per-query latency. BYTE carries the same 8-bit
-display data as WORD at half the bytes; WORD is only worth it when the 12-bit samples matter.
+Two limits: a floor of ~24 ms per query and a ceiling of ~10-12 MiB/s. Read the whole record in one
+query (`chunk_points=None`, the default); chunking only adds per-query latency.
+
+**Samples are always 16-bit.** `read_waveform` defaults to `fmt='WORD'` (uint16); that is the project
+convention. `fmt='BYTE'` still exists but throws away resolution for a 1.8x faster deep-memory transfer
+(25 M points: 2.3 s instead of 4.0 s); screen waveforms cost the same 24 ms either way.
 Full table: `bench_results/bench.json`.
+
+## Storing waveforms: keep `raw` + `preamble`
+
+A `Waveform` has `t` and `v` as float64 (8 bytes per sample each) and `raw` as uint16 (2 bytes per sample).
+`t` and `v` are fully determined by `raw` and the ten preamble numbers, so keep only those in memory and on
+disk and compute volts and time when needed:
+
+| 25 M-point capture | Size |
+|---|---|
+| `raw` (uint16) + preamble | 50 MB |
+| `v` (float64) | 200 MB |
+| `t` + `v` + `raw` | 450 MB |
+
+```python
+np.savez_compressed('capture.npz', raw=w.raw, **w.preamble)          # store
+d = np.load('capture.npz')                                            # restore
+v = (d['raw'].astype(np.float64) - d['yorigin'] - d['yreference']) * d['yincrement']
+t = (np.arange(len(v)) - d['xreference']) * d['xincrement'] + d['xorigin']
+```
+
+For a series of captures stack the `raw` arrays into one 2-D uint16 array with one preamble per capture (or one
+for all, if scale, offset and timebase did not change).
 
 ## Things the manual does not tell you (firmware 00.01.05)
 

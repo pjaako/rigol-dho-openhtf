@@ -52,7 +52,7 @@ def test_preamble_types():
 
 def test_read_waveform_byte():
     p = _plug()
-    w = p.read_waveform(1)
+    w = p.read_waveform(1, fmt='BYTE')
     assert isinstance(w, Waveform)
     assert len(w.t) == 1000
     assert len(w.v) == 1000
@@ -79,7 +79,7 @@ def test_read_waveform_word():
 
 def test_chunking():
     p = _plug(memory_depth=2500, status='STOP')
-    w = p.read_waveform(1, mode='RAW', chunk_points=1000)
+    w = p.read_waveform(1, mode='RAW', chunk_points=1000, fmt='BYTE')
     log = p._resource.log
     star_stop = [l for l in log if l.startswith(':WAV:STAR ') or l.startswith(':WAV:STOP ')]
     assert star_stop == [
@@ -232,7 +232,7 @@ def test_discovery_no_scope(monkeypatch):
 
 def test_raw_default_is_one_window_of_memory_depth():
     fr = FakeDhoResource(status='STOP', memory_depth=2500)
-    w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW')
+    w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW', fmt='BYTE')
     assert len(w.raw) == 2500
     assert fr.log.count(':WAV:DATA?') == 1
     assert ':WAV:STOP 2500' in fr.log
@@ -241,7 +241,7 @@ def test_raw_default_is_one_window_of_memory_depth():
 
 def test_raw_chunked_windows():
     fr = FakeDhoResource(status='STOP', memory_depth=2500)
-    w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW', chunk_points=1000)
+    w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW', chunk_points=1000, fmt='BYTE')
     windows = [c for c in fr.log if c.startswith((':WAV:STAR', ':WAV:STOP'))][2:]
     assert windows == [':WAV:STAR 1', ':WAV:STOP 1000', ':WAV:STAR 1001', ':WAV:STOP 2000',
                        ':WAV:STAR 2001', ':WAV:STOP 2500']
@@ -250,7 +250,7 @@ def test_raw_chunked_windows():
 
 def test_yorigin_is_applied():
     """Channel offset arrives as a non-zero yorigin and must be subtracted."""
-    w = _plug().read_waveform(1)
+    w = _plug().read_waveform(1, fmt='BYTE')
     assert w.preamble['yorigin'] == 58
     assert w.v[58 + 128] == pytest.approx(0.0)
 
@@ -280,7 +280,15 @@ def test_repeated_reads_skip_reconfiguration_and_can_reuse_preamble():
     fr.log.clear()
     plug.read_waveform(2)                      # different channel: full setup again
     assert ':WAV:SOUR CHAN2' in fr.log and ':WAV:PRE?' in fr.log
-    plug.write(':WAV:FORM WORD')               # raw command invalidates the cache
+    plug.write(':WAV:FORM BYTE')               # raw command invalidates the cache
     fr.log.clear()
     plug.read_waveform(2)
-    assert ':WAV:FORM BYTE' in fr.log
+    assert ':WAV:FORM WORD' in fr.log
+
+
+def test_default_format_is_16_bit():
+    fr = FakeDhoResource()
+    w = RigolDhoPlug(resource=fr).read_waveform(1)
+    assert ':WAV:FORM WORD' in fr.log
+    assert w.raw.dtype == np.uint16
+    assert w.preamble['format'] == 1

@@ -131,11 +131,13 @@ class RigolDhoPlug(BasePlug):
         self,
         channel: int,
         mode: str = 'NORM',
-        fmt: str = 'BYTE',
+        fmt: str = 'WORD',
         chunk_points: int = None,
         preamble: dict = None,
     ) -> Waveform:
-        """Read one waveform. Pass `preamble` from a previous Waveform to skip the
+        """Read one waveform as 16-bit samples (fmt='WORD', the project default).
+
+        Pass `preamble` from a previous Waveform to skip the
         :WAV:PRE? query (saves ~24 ms) when scale, offset and timebase have not changed."""
         # 1. Validate
         if channel not in (1, 2, 3, 4):

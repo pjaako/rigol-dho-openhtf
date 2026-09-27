@@ -20,7 +20,7 @@ from rigol_dho_plug import RigolDhoPlug
 @htf.plug(scope=RigolDhoPlug)
 def capture_waveform(test, scope):
     """Read channel 1 in NORM mode and record vpp and num_points."""
-    w = scope.read_waveform(1, mode='NORM', fmt='BYTE')
+    w = scope.read_waveform(1, mode='NORM')
     test.measurements.vpp = float(w.v.max() - w.v.min())
     test.measurements.num_points = len(w.raw)
     print(f'vpp={test.measurements.vpp:.4f} num_points={test.measurements.num_points}')
