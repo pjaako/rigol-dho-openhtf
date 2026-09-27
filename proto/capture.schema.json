@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Capture conditions for a Rigol DHO scope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["timebase", "trigger"],
+  "$defs": {
+    "volts":        {"type": "string", "pattern": "^\\s*[-+]?\\d+(\\.\\d+)?\\s*[mun]?V\\s*$", "description": "e.g. 1.5 V, -200 mV"},
+    "voltsPerDiv":  {"type": "string", "pattern": "^\\s*\\d+(\\.\\d+)?\\s*[mun]?V\\s*/\\s*div\\s*$", "description": "e.g. 1 V/div, 50 mV/div"},
+    "secondsPerDiv":{"type": "string", "pattern": "^\\s*\\d+(\\.\\d+)?\\s*[mun]?s\\s*/\\s*div\\s*$", "description": "e.g. 1 ms/div, 20 us/div"},
+    "channel": {
+      "type": "object", "additionalProperties": false, "required": ["scale"],
+      "properties": {
+        "scale":    {"$ref": "#/$defs/voltsPerDiv"},
+        "offset":   {"$ref": "#/$defs/volts"},
+        "coupling": {"enum": ["DC", "AC", "GND"]},
+        "probe":    {"enum": [1, 10, 100]}
+      }
+    }
+  },
+  "properties": {
+    "timebase": {"$ref": "#/$defs/secondsPerDiv"},
+    "memory":   {"enum": ["auto", "1k", "10k", "100k", "1M", "10M", "25M"]},
+    "ch1": {"$ref": "#/$defs/channel"}, "ch2": {"$ref": "#/$defs/channel"},
+    "ch3": {"$ref": "#/$defs/channel"}, "ch4": {"$ref": "#/$defs/channel"},
+    "trigger": {
+      "type": "object", "additionalProperties": false, "required": ["source", "level"],
+      "properties": {
+        "type":   {"enum": ["edge"]},
+        "source": {"enum": ["ch1", "ch2", "ch3", "ch4"]},
+        "level":  {"$ref": "#/$defs/volts"},
+        "slope":  {"enum": ["rising", "falling", "either"]},
+        "mode":   {"enum": ["auto", "normal", "single"]}
+      }
+    },
+    "extra": {"type": "object", "description": "raw SCPI header: value, for settings the model does not cover"}
+  }
+}

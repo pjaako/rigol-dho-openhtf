@@ -166,10 +166,33 @@ for all, if scale, offset and timebase did not change).
 - About 0.9 s after a setup block is loaded the scope switches waveform recording off. `set_state` waits
   1.2 s before switching it back on and checks that it stayed.
 
-`proto/capture.py` is a proposal, not wired into the plug: a readable, typed description of capture
-conditions (`Capture(timebase=1 * ms / div, ch1=Channel(scale=1 * V / div, ...), ...)`) that turns into the
-dict `apply_setup` takes. `proto/bad.py` holds seven deliberate mistakes; mypy, pyright and the runtime check
-each catch all seven.
+### Capture conditions as a readable file (prototype in `proto/`, chosen style, not yet wired in)
+
+```yaml
+timebase: 1 ms/div
+ch1:
+  scale: 1 V/div
+  offset: -1.5 V
+  coupling: DC
+trigger:
+  source: ch1
+  level: 1.5 V
+  slope: rising
+  mode: normal
+memory: 1M
+```
+
+`proto/capture_yaml.py` loads such a file into the typed model of `proto/capture.py`, which turns into the
+dict `apply_setup` takes. Mistakes are caught in four places:
+
+| Stage | Who | Catches |
+|---|---|---|
+| While typing | editor with `proto/capture.schema.json` | unknown keys, wrong choices, wrong unit or missing `/div` |
+| Before commit / in CI | `check-jsonschema`, or loading every file | the same, for people without such an editor |
+| When the test starts | `load_capture()` | everything above plus cross-checks, all problems at once, with hints |
+| On the scope | `apply_setup()` | values the scope clamps or rejects |
+
+`proto/captures/broken.yaml` holds nine deliberate mistakes; the loader and the schema each report all nine.
 
 ## Memory and frame recording (measured 2026-09-27, one channel on)
 

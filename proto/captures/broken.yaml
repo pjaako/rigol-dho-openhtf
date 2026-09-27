@@ -1,0 +1,12 @@
+timebase: 1 V/div          # volts where time is expected
+ch1:
+  scale: 1 V               # forgot "/div"
+  ofset: -1.5 V            # typo in the key
+  coupling: DCC            # no such coupling
+triger:                    # typo in the block name
+  source: ch1
+trigger:
+  source: ch5              # no such channel
+  level: 1.5 ms            # level in milliseconds
+  slope: up                # no such slope
+memory: 2M                 # unsupported depth
