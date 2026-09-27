@@ -97,12 +97,15 @@ def bench(plug: RigolDhoPlug, args) -> list[dict]:
         results.append({'scenario': 'idn', 'error': f'ERROR: {exc}'})
 
     # ── norm_byte / norm_word ────────────────────────────────
-    for fmt, label in [('BYTE', 'norm_byte'), ('WORD', 'norm_word')]:
+    # *_reuse_pre passes the previous preamble back in, skipping the :WAV:PRE? query
+    for fmt, label, reuse in [('BYTE', 'norm_byte', False), ('WORD', 'norm_word', False),
+                              ('BYTE', 'norm_byte_reuse_pre', True), ('WORD', 'norm_word_reuse_pre', True)]:
         try:
             times: list[float] = []
+            w = plug.read_waveform(args.channel, 'NORM', fmt)   # first call configures the scope, not timed
             for _ in range(args.repeats):
                 t0 = time.perf_counter()
-                w = plug.read_waveform(args.channel, 'NORM', fmt)
+                w = plug.read_waveform(args.channel, 'NORM', fmt, preamble=w.preamble if reuse else None)
                 times.append((time.perf_counter() - t0) * 1000)
             points = len(w.raw)
             median_ms = statistics.median(times)

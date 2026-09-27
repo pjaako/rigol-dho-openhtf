@@ -267,3 +267,20 @@ def test_example_runs_in_fake_mode():
     r = subprocess.run([sys.executable, 'example_test.py', '--fake'], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert 'num_points=1000' in r.stdout
+
+
+def test_repeated_reads_skip_reconfiguration_and_can_reuse_preamble():
+    fr = FakeDhoResource()
+    plug = RigolDhoPlug(resource=fr)
+    w1 = plug.read_waveform(1)
+    fr.log.clear()
+    w2 = plug.read_waveform(1, preamble=w1.preamble)
+    assert fr.log == [':WAV:DATA?']
+    np.testing.assert_array_equal(w1.v, w2.v)
+    fr.log.clear()
+    plug.read_waveform(2)                      # different channel: full setup again
+    assert ':WAV:SOUR CHAN2' in fr.log and ':WAV:PRE?' in fr.log
+    plug.write(':WAV:FORM WORD')               # raw command invalidates the cache
+    fr.log.clear()
+    plug.read_waveform(2)
+    assert ':WAV:FORM BYTE' in fr.log

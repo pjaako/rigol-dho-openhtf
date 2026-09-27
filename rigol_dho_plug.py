@@ -68,10 +68,13 @@ class RigolDhoPlug(BasePlug):
         self._resource.chunk_size = 1024 * 1024
         self._resource.read_termination = '\n'
         self._resource.write_termination = '\n'
+        self._wav_setup = None  # (channel, mode, fmt, n) last sent; skips ~100 ms of re-configuration
 
     # ── low-level ──────────────────────────────────────────────
 
     def write(self, cmd: str) -> None:
+        if cmd.upper().startswith((':WAV', ':ACQ')):
+            self._wav_setup = None
         self._resource.write(cmd)
 
     def query(self, cmd: str) -> str:
@@ -130,7 +133,10 @@ class RigolDhoPlug(BasePlug):
         mode: str = 'NORM',
         fmt: str = 'BYTE',
         chunk_points: int = None,
+        preamble: dict = None,
     ) -> Waveform:
+        """Read one waveform. Pass `preamble` from a previous Waveform to skip the
+        :WAV:PRE? query (saves ~24 ms) when scale, offset and timebase have not changed."""
         # 1. Validate
         if channel not in (1, 2, 3, 4):
             raise ValueError(f'channel must be 1-4, got {channel}')
@@ -145,22 +151,27 @@ class RigolDhoPlug(BasePlug):
                 'RAW memory can only be read while scope is STOPped'
             )
 
-        # 3. Set waveform parameters
-        self.write(f':WAV:SOUR CHAN{channel}')
-        self.write(f':WAV:MODE {mode}')
-        self.write(f':WAV:FORM {fmt}')
-
-        # 4. Determine number of points
+        # 3. Configure the waveform source only when something changed
         n = self.memory_depth() if mode == 'RAW' else 1000
+        setup = (channel, mode, fmt, n)
+        if setup != self._wav_setup:
+            self._resource.write(f':WAV:SOUR CHAN{channel}')
+            self._resource.write(f':WAV:MODE {mode}')
+            self._resource.write(f':WAV:FORM {fmt}')
+            self._resource.write(':WAV:STAR 1')
+            self._resource.write(f':WAV:STOP {n}')
+            preamble = None  # a cached preamble is not valid for a new setup
+        elif chunk_points is not None:
+            self._resource.write(':WAV:STAR 1')
+            self._resource.write(f':WAV:STOP {n}')
 
-        # 5. Set STAR/STOP then read preamble and verify points
-        self.write(':WAV:STAR 1')
-        self.write(f':WAV:STOP {n}')
-        pre = self.preamble()
+        # 4. Preamble (in RAW its point count is the STAR..STOP window, so set the window first)
+        pre = preamble if preamble is not None else self.preamble()
         if pre['points'] != n:
             raise RuntimeError(
                 f'Expected {n} points, preamble says {pre["points"]}'
             )
+        self._wav_setup = setup if chunk_points is None else None
 
         # 6. Read samples
         datatype = 'B' if fmt == 'BYTE' else 'H'
