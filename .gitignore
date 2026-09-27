@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+opencode.json
+opencode.jsonl
+opencode.err
+.serena/
+bench_results/*.npy

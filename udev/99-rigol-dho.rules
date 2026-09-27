@@ -1,0 +1,5 @@
+# Rigol instruments (vendor 1ab1): let members of "plugdev" talk to them without root.
+# libusb node (used by PyVISA + pyvisa-py)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1ab1", MODE="0660", GROUP="plugdev"
+# kernel usbtmc character device (/dev/usbtmcN)
+KERNEL=="usbtmc[0-9]*", ATTRS{idVendor}=="1ab1", MODE="0660", GROUP="plugdev"
