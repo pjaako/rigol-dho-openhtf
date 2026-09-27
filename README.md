@@ -66,6 +66,30 @@ Full table: `bench_results/bench.json`.
 - pyvisa-py names the device `USB0::6833::1101::<serial>::0::INSTR` (decimal vendor id).
 - Re-sending `:WAV:SOUR/MODE/FORM` costs ~80 ms per waveform; the plug caches the last setup.
 
+## Memory and frame recording (measured 2026-09-27, one channel on)
+
+Memory depth: 1k, 10k, 100k, 1M, 10M, 25M points; 25M is the maximum (`50M` is clamped to 25M).
+
+The scope can record a series of triggered frames and replay them (`:REC:WREC:*`, `:REC:WREP:*`):
+
+| Memory depth | Max frames (`:REC:WREC:FMAX?`) |
+|---|---|
+| 1k | 61 440 |
+| 10k | 7 680 |
+| 100k | 960 |
+| 1M | 120 |
+| 10M | 15 |
+| 25M | 6 |
+
+Sequence: `:REC:WREC:ENAB ON`, `:REC:WREC:FRAM n`, `:REC:WREC:FINT seconds`, `:REC:WREC:OPER RUN`, poll
+`:REC:WREC:OPER?` until `STOP`, then for each frame `:REC:WREP:FCUR k` and `read_waveform(ch, mode='NORM')`.
+
+- NORM download of recorded frames works: 200 frames x 1000 points in 5.3 s (37.5 frames/s).
+- **RAW does not follow the selected frame**: every `:WAV:DATA?` in RAW mode returns the same record whatever
+  `:REC:WREP:FCUR` is, also after a 1 s delay. Recorded frames are only available at screen resolution
+  (1000 points, 8 bit). MAX mode returns no data during replay.
+- For a series at full memory depth, loop `single()` / wait for `STOP` / `read_waveform(mode='RAW')` instead.
+
 ## Prior art checked
 
 [pydho800](https://github.com/MasterJubei/pydho800) (BSD-3, LAN only, ASCII waveform transfer),
