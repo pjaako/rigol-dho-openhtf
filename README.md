@@ -53,9 +53,12 @@ Full table: `bench_results/bench.json`.
 
 ## Things the manual does not tell you (firmware 00.01.05)
 
-- **Volts:** `v = (raw - yreference) * yincrement`. The manual's formula also subtracts `yorigin`; doing so
-  shifts the result by exactly the channel offset. Verified in NORM and RAW, BYTE and WORD.
-  The gain (`yincrement`) has not been checked against a calibrated source yet.
+- **Volts:** the manual's formula `v = (raw - yorigin - yreference) * yincrement` is correct. Verified on the
+  probe-compensation square wave (3 Vpp) at channel offsets 0, -1.5 and +1 V, BYTE and WORD: the plug's
+  low/high levels and Vpp match the scope's own VBAS/VTOP/VPP within 1 LSB.
+- **Clipped data lies.** When the trace leaves the screen the samples saturate at 0 / 255 and their mean sits
+  near mid-scale whatever the offset. Check `raw.min() > 0 and raw.max() < 255` (65535 for WORD) before
+  trusting a waveform.
 - In RAW mode the preamble's `points` is the `:WAV:STAR`..`:WAV:STOP` window, not the memory depth.
 - `:ACQ:MDEP` rejects the format `:ACQ:MDEP?` returns (`1.0000E+05`); `100k`, `1E5` and `100000` work.
 - `:TRIG:STAT?` returns `TD` while running; only `STOP` means stopped.

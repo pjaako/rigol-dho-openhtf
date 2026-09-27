@@ -208,8 +208,9 @@ class RigolDhoPlug(BasePlug):
                 f'Expected {n} samples, got {len(raw)}'
             )
 
-        # 7. Convert to volts and time (no yorigin per firmware 00.01.05)
-        v = (raw.astype(np.float64) - pre['yreference']) * pre['yincrement']
+        # 7. Convert to volts and time. Verified against the scope's own VTOP/VBAS/VPP on a 3 Vpp
+        #    square wave at channel offsets 0, -1.5 and +1 V, BYTE and WORD (firmware 00.01.05).
+        v = (raw.astype(np.float64) - pre['yorigin'] - pre['yreference']) * pre['yincrement']
         t = (np.arange(n, dtype=np.float64) - pre['xreference']) * pre['xincrement'] + pre['xorigin']
 
         return Waveform(t=t, v=v, raw=raw, preamble=pre)

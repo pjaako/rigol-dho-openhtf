@@ -58,7 +58,7 @@ def test_read_waveform_byte():
     assert len(w.v) == 1000
     assert len(w.raw) == 1000
     assert w.raw[5] == 5
-    assert w.v[5] == pytest.approx((5 - 128) * 0.04)
+    assert w.v[5] == pytest.approx((5 - 58 - 128) * 0.04)
     assert w.t[0] == pytest.approx(-5e-4)
     assert w.t[1] - w.t[0] == pytest.approx(1e-6)
 
@@ -71,7 +71,7 @@ def test_read_waveform_word():
     assert w.raw.dtype == np.uint16
     assert len(w.raw) == 1000
     # sample[0] = (0 * 257) % 65536 = 0
-    expected_v0 = (0 - 32768) * 1.5625e-04
+    expected_v0 = (0 - 15000 - 32768) * 1.5625e-04
     assert w.v[0] == pytest.approx(expected_v0)
 
 
@@ -248,11 +248,11 @@ def test_raw_chunked_windows():
     np.testing.assert_array_equal(w.raw, np.arange(2500) % 256)
 
 
-def test_yorigin_is_ignored():
-    plug = _plug()
-    w = plug.read_waveform(1)
-    assert w.preamble['yorigin'] != 0
-    assert w.v[128] == pytest.approx(0.0)
+def test_yorigin_is_applied():
+    """Channel offset arrives as a non-zero yorigin and must be subtracted."""
+    w = _plug().read_waveform(1)
+    assert w.preamble['yorigin'] == 58
+    assert w.v[58 + 128] == pytest.approx(0.0)
 
 
 def test_bench_runs_in_fake_mode(tmp_path):
