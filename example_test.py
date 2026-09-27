@@ -12,13 +12,6 @@ from openhtf.util import units
 
 from rigol_dho_plug import RigolDhoPlug
 
-# Test conditions live in the test, not in the plug: a dict of SCPI header -> value.
-CAPTURE = {
-    ':TIM:MAIN:SCAL': 1e-3,
-    ':CHAN1:SCAL': 0.5,
-    ':CHAN1:COUP': 'DC',
-}
-
 
 @htf.measures(
     htf.Measurement('vpp').with_units(units.VOLT),
@@ -26,9 +19,8 @@ CAPTURE = {
 )
 @htf.plug(scope=RigolDhoPlug)
 def capture_waveform(test, scope):
-    """Reset the scope, apply the capture setup, then read channel 1 and record vpp/num_points."""
-    scope.reset()
-    scope.apply_setup(CAPTURE)
+    """Apply the capture conditions, then read channel 1 and record vpp/num_points."""
+    scope.apply_capture('captures/clock.yaml')
     w = scope.read_waveform(1, mode='NORM')
     test.measurements.vpp = float(w.v.max() - w.v.min())
     test.measurements.num_points = len(w.raw)

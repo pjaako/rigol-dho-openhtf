@@ -128,7 +128,9 @@ class FakeDhoResource:
         elif cmd.startswith(':REC:WREC:ENAB '):
             self._recording = cmd.split()[1].upper() in ('ON', '1')
         elif cmd.startswith(':ACQ:MDEP '):
-            self._memory_depth = _parse_depth(cmd.split(None, 1)[1])
+            value = cmd.split(None, 1)[1]
+            if value.strip().upper() != 'AUTO':  # AUTO leaves the depth at whatever it resolved to
+                self._memory_depth = _parse_depth(value)
         elif cmd == ':WAV:SOUR':
             pass
         elif cmd.startswith(':WAV:SOUR'):

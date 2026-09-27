@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 from openhtf.plugs import BasePlug
 from openhtf.util import configuration
+
+from capture import Capture, load_capture
 
 if TYPE_CHECKING:
     import pyvisa
@@ -57,8 +60,10 @@ def _values_match(sent, readback: str) -> bool:
     """Compare a value passed to apply_setup with the scope's read-back string."""
     if isinstance(sent, bool):
         return readback.strip() in (('1', 'ON') if sent else ('0', 'OFF'))
-    sent_num = _parse_number(sent)
     read_num = _parse_number(readback)
+    if str(sent).strip().casefold() == 'auto' and read_num is not None:
+        return True   # the scope answers AUTO with the value it picked, e.g. 6.2500E+05
+    sent_num = _parse_number(sent)
     if sent_num is not None and read_num is not None:
         return math.isclose(sent_num, read_num, rel_tol=1e-6, abs_tol=1e-12)
     return str(sent).strip().casefold() == readback.strip().casefold()
@@ -343,6 +348,8 @@ class RigolDhoPlug(BasePlug):
         failures = []
         for key, value in setup.items():
             sent = 'ON' if value is True else 'OFF' if value is False else value
+            if isinstance(sent, float):
+                sent = format(sent, '.9G')   # 0.00019999999999999998 was read by the scope as 198 us
             self.write(f'{key} {sent}')
             errors = self.check_errors()
             try:
@@ -357,6 +364,20 @@ class RigolDhoPlug(BasePlug):
         self._wav_setup = None
         if failures:
             raise RuntimeError('apply_setup failed: ' + '; '.join(failures))
+
+    def apply_capture(self, capture: Capture | str | Path, reset: bool = True) -> Capture:
+        """Apply a `Capture` (or the path to a capture YAML file) to the scope.
+
+        Loading a path happens before anything is sent to the scope, so a broken file raises
+        `capture.CaptureError` without side effects. `reset=True` (the default) resets the scope
+        first, so the capture describes the difference from factory defaults.
+        """
+        if not isinstance(capture, Capture):
+            capture = load_capture(capture)
+        if reset:
+            self.reset()
+        self.apply_setup(capture.to_scpi())
+        return capture
 
     # ── lifecycle ─────────────────────────────────────────────
 

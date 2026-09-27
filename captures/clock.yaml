@@ -1,10 +1,11 @@
+# yaml-language-server: $schema=../capture.schema.json
+# $schema: ../capture.schema.json
 timebase: 1 ms/div
 ch1:
   scale: 1 V/div
   offset: -1.5 V
   coupling: DC
 trigger:
-  type: edge
   source: ch1
   level: 1.5 V
   slope: rising

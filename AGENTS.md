@@ -13,3 +13,7 @@ OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 - To save memory and disk keep `Waveform.raw` (uint16) plus `Waveform.preamble`; do not store the float64 `t`/`v` arrays, recompute them (formulas in README).
 - When a measurement is meant to compare tools, do not drive the instrument with one of the tools under comparison. Use an independent control (`tools/bare_socket_check.py`) and say which confounders remain.
 - A fake instrument only knows what we told it. Acceptance on the real scope found two defects the 44 fake-based tests could not: an unknown header times out instead of answering, and the scope undoes `:REC:WREC:ENAB ON` ~0.9 s after a setup block. Every feature gets a run on hardware before it is called done, and each such finding goes back into the fake.
+- Capture conditions are YAML files in `captures/` (chosen by the user over Python dicts and typed Python for readability); `capture.py` is the single source for keys, choices and units, and `capture.schema.json` is generated from it (`python capture.py schema`), never edited by hand.
+- Hand-written hardware checks must wrap the work in `try: ... finally: plug.tearDown()`. One check raised halfway and left the user's scope reset; it was recovered from `setups/user_setup_2026-09-27.bin`. OpenHTF itself always calls `tearDown`.
+- Set OpenHTF config keys after importing the plug module (`CONF.load(...)` before the key is declared is lost).
+- Run `mypy --strict capture.py` with a checker from outside the project venv; it must stay clean.

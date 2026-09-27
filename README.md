@@ -58,7 +58,7 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-.venv/bin/python -m pytest -q                              # 46 tests, no hardware needed
+.venv/bin/python -m pytest -q                              # 100 tests, no hardware needed
 .venv/bin/python example_test.py [--fake]
 .venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
 ```
@@ -163,10 +163,19 @@ for all, if scale, offset and timebase did not change).
   any error from the scope. A bad value (`:CHAN1:COUP XYZ`) gives `-222,"Data out of range"`.
 - A header the scope does not know is never answered: the read-back times out (resource timeout, 10 s by
   default) and `apply_setup` reports it together with `-100,"Command err"`.
+- Numbers must be sent clean. `200 * 1e-6` is `0.00019999999999999998` in binary floating point and the
+  scope set 198 us/div from it. The capture parser uses decimal arithmetic and `apply_setup` sends floats
+  with 9 significant digits.
+- `:ACQ:MDEP AUTO` reads back as the depth the scope picked (e.g. `6.2500E+05`); `apply_setup` accepts that.
+- `apply_capture('captures/clock.yaml')` takes 2.1 s including the reset; a file with mistakes is refused
+  before anything is sent.
 - About 0.9 s after a setup block is loaded the scope switches waveform recording off. `set_state` waits
   1.2 s before switching it back on and checks that it stayed.
 
-### Capture conditions as a readable file (prototype in `proto/`, chosen style, not yet wired in)
+### Capture conditions as a readable file
+
+`captures/clock.yaml`, applied with `scope.apply_capture('captures/clock.yaml')` (`reset()`, then
+`apply_setup(capture.to_scpi())`):
 
 ```yaml
 timebase: 1 ms/div
@@ -182,17 +191,46 @@ trigger:
 memory: 1M
 ```
 
-`proto/capture_yaml.py` loads such a file into the typed model of `proto/capture.py`, which turns into the
-dict `apply_setup` takes. Mistakes are caught in four places:
+`capture.py` is the typed model (`Capture`, `Channel`, `Edge`) and the YAML front end for it. Quantities are
+strings `<number> <prefix><unit>`, prefixes `m u µ n k`, units `V`/`s`, `/div` where the field is per division.
+
+| Field | Unit | Choices |
+|---|---|---|
+| `timebase` | s/div | required |
+| `ch1`-`ch4` | — | each optional; `scale` required, `offset` V (default 0 V) |
+| `ch*.coupling` | — | `DC`, `AC`, `GND` |
+| `ch*.probe` | — | `1`, `10`, `100` |
+| `trigger.source` | — | a described channel, required |
+| `trigger.level` | V | required |
+| `trigger.slope` | — | `rising`, `falling`, `either` |
+| `trigger.mode` | — | `auto`, `normal`, `single` |
+| `memory` | — | `auto`, `1k`, `10k`, `100k`, `1M`, `10M`, `25M` |
+| `extra` | — | raw SCPI header: value, passed to `to_scpi()` last |
+
+Mistakes are caught in four places:
 
 | Stage | Who | Catches |
 |---|---|---|
-| While typing | editor with `proto/capture.schema.json` | unknown keys, wrong choices, wrong unit or missing `/div` |
-| Before commit / in CI | `check-jsonschema`, or loading every file | the same, for people without such an editor |
-| When the test starts | `load_capture()` | everything above plus cross-checks, all problems at once, with hints |
-| On the scope | `apply_setup()` | values the scope clamps or rejects |
+| While typing | editor with `capture.schema.json` | unknown keys, wrong choices, wrong unit or missing `/div` |
+| Before commit / in CI | `python capture.py check captures/*.yaml` | the same, for people without such an editor |
+| When the test starts | `load_capture()` | everything above plus cross-checks, all problems at once, with `<file>:<line>:` and hints |
+| On the scope | `apply_setup()` (inside `apply_capture()`) | values the scope clamps or rejects |
 
-`proto/captures/broken.yaml` holds nine deliberate mistakes; the loader and the schema each report all nine.
+`tests/data/broken.yaml` holds nine deliberate mistakes; the loader and the schema (`python capture.py
+schema`, also committed as `capture.schema.json`) each report all nine.
+
+Editor setup: VS Code (Red Hat YAML extension) picks up `.vscode/settings.json`
+(`"yaml.schemas": {"./capture.schema.json": "captures/*.yaml"}`) automatically. PyCharm: Settings >
+Languages & Frameworks > Schemas and DTDs > JSON Schema Mappings, add `capture.schema.json`, schema
+version 2020-12, file path pattern `captures/*.yaml`.
+
+The Python spelling still works directly, without YAML:
+
+```python
+from capture import Capture, Channel, Edge, V, ms, div
+Capture(timebase=1 * ms / div, ch1=Channel(scale=1 * V / div, offset=-1.5 * V),
+        trigger=Edge(source='ch1', level=1.5 * V))
+```
 
 ## Memory and frame recording (measured 2026-09-27, one channel on)
 
@@ -291,5 +329,8 @@ over USB with a fresh preamble on every read. Times are for one waveform of chan
 
 ## Files
 
-`rigol_dho_plug.py` the plug · `fake_resource.py` hardware-free stand-in · `tests/` · `bench_usb.py` ·
-`example_test.py` · `udev/` · `tools/bare_socket_check.py` · `SPEC.md` the original spec (superseded where this README differs).
+`rigol_dho_plug.py` the plug · `fake_resource.py` hardware-free stand-in · `capture.py` typed model + YAML
+front end for capture conditions · `capture.schema.json` its generated JSON Schema · `captures/` capture
+files · `tests/` (including `tests/data/broken.yaml`) · `bench_usb.py` · `example_test.py` · `udev/` ·
+`tools/bare_socket_check.py` · `.vscode/settings.json` YAML schema mapping for VS Code ·
+`SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md` the original specs (superseded where this README differs).
