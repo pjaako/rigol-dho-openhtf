@@ -54,7 +54,7 @@ convention. `fmt='BYTE'` still exists but throws away resolution for a 1.8x fast
 (25 M points: 2.3 s instead of 4.0 s); screen waveforms cost the same 24 ms either way.
 Full table: `bench_results/bench.json`.
 
-## Ethernet (measured 2026-09-27, direct cable, link negotiated at 10 Mbit/s)
+## Ethernet (measured 2026-09-27, direct cable, 100 Mbit/s link)
 
 Set the OpenHTF config key `rigol_dho_resource` to `TCPIP::192.0.2.10::INSTR` (VXI-11) or
 `TCPIP::192.0.2.10::5555::SOCKET` (raw socket). The scope does not offer HiSLIP (port 4880 closed).
@@ -63,18 +63,20 @@ No code differs from USB; PyVISA provides all three transports.
 | | USB | VXI-11 | Raw socket 5555 |
 |---|---|---|---|
 | Query latency (`*IDN?`) | 22-24 ms | 23 ms | 24 ms |
-| Screen waveform, preamble reused | 24 ms (42/s) | 29 ms (35/s) | 27 ms (37/s) |
-| RAW 1 M points, WORD | 0.29 s | 2.04 s | 2.03 s |
-| RAW 10 M points, WORD | 1.7 s (11 MiB/s) | 19.0 s (1.0 MiB/s) | 17.7 s (1.1 MiB/s) |
+| Screen waveform, preamble reused | 24 ms (42/s) | 26 ms (37/s) | 28 ms (37/s) |
+| RAW 1 M points, WORD | 0.29 s | 0.48 s | 0.50 s |
+| RAW 10 M points, WORD | 1.7 s (11.3 MiB/s) | 3.3 s (5.7 MiB/s) | 3.0 s (6.5 MiB/s) |
+| RAW 25 M points, WORD | 4.0 s (11.8 MiB/s) | 7.9 s (6.0 MiB/s) | 7.1 s (6.7 MiB/s) |
 
 - The ~24 ms per query is the scope's own SCPI processing time: it is the same on every transport.
-- Throughput was capped by the 10 Mbit/s link. At 100 Mbit/s the ceiling would be ~11 MiB/s, the same as USB,
-  so Ethernet cannot beat USB on this scope; its advantages are cable length, galvanic isolation and sharing.
-- The two LAN transports perform the same; raw socket is marginally faster on large transfers.
+- Ethernet tops out at 6-7 MiB/s, about half of what the 100 Mbit/s link could carry and 1.8x slower than
+  USB. USB is the fastest transport for this scope; Ethernet's advantages are cable length, galvanic
+  isolation and sharing.
+- Raw socket is ~10 % faster than VXI-11 on large transfers, equal otherwise.
+- Check the negotiated link speed (`cat /sys/class/net/<if>/speed`). A bad cable negotiated 10 Mbit/s and
+  capped transfers at 1 MiB/s (10 M points WORD in 18 s).
 - Static addressing over SCPI: `:LAN:MAN ON`, then `:LAN:AUT OFF` (rejected while manual mode is off),
   `:LAN:DHCP OFF`, `:LAN:IPAD`, `:LAN:SMAS`, `:LAN:GAT`, `:LAN:APPL`. Auto IP wins over manual while it is on.
-- The plug's fixed 10 s timeout is too short for >5 M points over a 10 Mbit/s link; raise
-  `plug._resource.timeout` for such reads.
 
 ## Storing waveforms: keep `raw` + `preamble`
 
