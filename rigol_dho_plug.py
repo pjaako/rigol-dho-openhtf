@@ -152,6 +152,12 @@ class RigolDhoPlug(BasePlug):
             raise RuntimeError(
                 'RAW memory can only be read while scope is STOPped'
             )
+        if mode == 'RAW' and self.query(':REC:WREC:ENAB?') == '1':
+            raise RuntimeError(
+                'Waveform recording is enabled: RAW would return a capture that is none of '
+                'the recorded frames. Read frames with mode=\'NORM\' or disable recording '
+                '(:REC:WREC:ENAB OFF).'
+            )
 
         # 3. Configure the waveform source only when something changed
         n = self.memory_depth() if mode == 'RAW' else 1000

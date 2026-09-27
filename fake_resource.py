@@ -26,6 +26,7 @@ class FakeDhoResource:
 
         # Configurable state
         self._status = status  # RUN / STOP / WAIT
+        self._recording = False  # :REC:WREC:ENAB
         self._memory_depth = memory_depth
         self._wav_mode = 'NORM'
         self._wav_form = 'BYTE'
@@ -47,6 +48,8 @@ class FakeDhoResource:
         elif cmd == ':SING':
             self._status = 'WAIT'
             self._sing_wait_count = 0
+        elif cmd.startswith(':REC:WREC:ENAB '):
+            self._recording = cmd.split()[1].upper() in ('ON', '1')
         elif cmd.startswith(':ACQ:MDEP '):
             self._memory_depth = _parse_depth(cmd.split(None, 1)[1])
         elif cmd == ':WAV:SOUR':
@@ -82,6 +85,8 @@ class FakeDhoResource:
                     self._status = 'STOP'
                     return 'STOP'
             return self._status
+        if cmd == ':REC:WREC:ENAB?':
+            return '1' if self._recording else '0'
         if cmd == ':ACQ:MDEP?':
             return f'{self._memory_depth:.4E}'
 

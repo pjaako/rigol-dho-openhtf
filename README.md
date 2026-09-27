@@ -165,8 +165,24 @@ edge exactly at t = 0, as in a triggered capture. It matches none of the recorde
 buffer therefore seems to hold an acquisition from before the recording, and recording does not update it
 (inferred from one experiment).
 
-Open: UltraAcquire segments are browsed with "Navigate segments", not with record/replay, so the earlier
-UltraAcquire test used the wrong mechanism. Whether segments can be read by SCPI is untested.
+The plug refuses `mode='RAW'` while recording is enabled (`:REC:WREC:ENAB?` is 1) instead of returning
+that unrelated capture.
+
+### UltraAcquire segments (explored 2026-09-27, not yet understood well enough to build on)
+
+Commands: `:ACQ:TYPE ULTR`, `:ACQ:ULTR:MAXF n`, `:ACQ:ULTR:TIM seconds`, `:NAV:ENAB ON`, `:NAV:MODE FRAM`,
+`:NAV:FRAM:STAR:FRAM`, `:NAV:FRAM:END:FRAM`, `:NAV:FRAM:NEXT|BACK|STAR|END`.
+
+- Segments are filled per trigger event, so a working trigger is required, and sampling stops at the
+  timeout (default 1 ms). At 500 us/div only one segment fits; with `:ACQ:ULTR:TIM 1` and 20 us/div the
+  scope showed 8-9 segments.
+- Frame navigation commands are accepted but never change what `:WAV:DATA?` returns.
+- A RAW read can contain many segments back to back: at depth 100k it held 5 trigger edges and at 1M it
+  held 49, always 20 480 samples apart, while the real signal period was 1 ms. 1 M points took 0.41 s.
+  At depth 10k the read held a single edge.
+- Not understood: why 20 480 samples per segment, how the count relates to `MAXF` and to the 8-9 segments
+  shown on screen, and whether segments carry timestamps. Until then the dependable way to get a series at
+  full depth is a loop of `single()` / wait for `STOP` / `read_waveform(mode='RAW')`.
 
 ## Other projects, run against the same scope (2026-09-27)
 

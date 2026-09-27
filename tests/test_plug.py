@@ -292,3 +292,14 @@ def test_default_format_is_16_bit():
     assert ':WAV:FORM WORD' in fr.log
     assert w.raw.dtype == np.uint16
     assert w.preamble['format'] == 1
+
+
+def test_raw_is_refused_while_recording_is_enabled():
+    fr = FakeDhoResource(status='STOP')
+    plug = RigolDhoPlug(resource=fr)
+    plug.write(':REC:WREC:ENAB ON')
+    with pytest.raises(RuntimeError, match='recording'):
+        plug.read_waveform(1, mode='RAW')
+    assert len(plug.read_waveform(1, mode='NORM').raw) == 1000      # frames stay readable in NORM
+    plug.write(':REC:WREC:ENAB OFF')
+    assert len(plug.read_waveform(1, mode='RAW').raw) == 10000
