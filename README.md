@@ -55,11 +55,12 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 ## Setup
 
 ```bash
-uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest
+uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest pyyaml jsonschema matplotlib
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
 .venv/bin/python -m pytest -q                              # 100 tests, no hardware needed
 .venv/bin/python example_test.py [--fake]
+.venv/bin/python examples/operator_demo.py [--fake]        # web GUI on port 4444, see examples/README.md
 .venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
 ```
 
