@@ -157,8 +157,13 @@ Both remaining confounders were then removed with the user's help:
   frames), RAW the identical 10 000 samples for every frame.
 
 So both are properties of the scope on firmware 00.01.05: a fixed ~22 ms per query, and deep-memory (RAW)
-readout that ignores the selected replay frame. Which acquisition the RAW data belongs to could not be
-determined; the frames differ only by noise and it matches all of them equally well.
+readout that ignores the selected replay frame.
+
+What RAW returns instead: with the trigger removed, 20 recorded frames had rising edges scattered over the
+whole period (phases 840, 570, 264, 26, 964 us for frames 1, 10, 18, 19, 20), while the memory data had its
+edge exactly at t = 0, as in a triggered capture. It matches none of the recorded frames. The deep-memory
+buffer therefore seems to hold an acquisition from before the recording, and recording does not update it
+(inferred from one experiment).
 
 Open: UltraAcquire segments are browsed with "Navigate segments", not with record/replay, so the earlier
 UltraAcquire test used the wrong mechanism. Whether segments can be read by SCPI is untested.
