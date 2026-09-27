@@ -139,6 +139,19 @@ Sequence: `:REC:WREC:ENAB ON`, `:REC:WREC:FRAM n`, `:REC:WREC:FINT seconds`, `:R
   (1000 points, 8 bit). MAX mode returns no data during replay.
 - For a series at full memory depth, loop `single()` / wait for `STOP` / `read_waveform(mode='RAW')` instead.
 
+## Independent control measurement (2026-09-27)
+
+The comparisons below used the plug over USB to set up the scope, which could itself have caused the common
+results. `tools/bare_socket_check.py` repeats both checks with nothing but a stdlib TCP socket in a fresh
+process: no PyVISA, no plug, no open USB session.
+
+- Query latency: 21.3 ms minimum, 22-24 ms median, identical in RUN and STOP and at 1 us, 1 ms and 100 ms
+  per division. It is a fixed cost inside the scope.
+- Recorded frames: NORM reads gave 4 distinct frames out of 4, RAW reads gave the same record 4 times.
+
+Not excluded: the USB cable was still plugged in (idle), and the recording was started by SCPI rather than
+from the front panel.
+
 ## Other projects, run against the same scope (2026-09-27)
 
 All five were read first (no shell calls, no foreign hosts), then run over Ethernet at 100 Mbit/s; ours runs
@@ -168,4 +181,4 @@ over USB with a fresh preamble on every read. Times are for one waveform of chan
 ## Files
 
 `rigol_dho_plug.py` the plug · `fake_resource.py` hardware-free stand-in · `tests/` · `bench_usb.py` ·
-`example_test.py` · `udev/` · `SPEC.md` the original spec (superseded where this README differs).
+`example_test.py` · `udev/` · `tools/bare_socket_check.py` · `SPEC.md` the original spec (superseded where this README differs).
