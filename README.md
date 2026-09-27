@@ -149,8 +149,19 @@ process: no PyVISA, no plug, no open USB session.
   per division. It is a fixed cost inside the scope.
 - Recorded frames: NORM reads gave 4 distinct frames out of 4, RAW reads gave the same record 4 times.
 
-Not excluded: the USB cable was still plugged in (idle), and the recording was started by SCPI rather than
-from the front panel.
+Both remaining confounders were then removed with the user's help:
+
+- USB cable physically unplugged: latency unchanged (21.4 ms minimum, 22-23 ms median).
+- Series recorded by hand from the front panel (Record menu, 20 frames), then only read by
+  `tools/read_recorded_frames.py`: NORM 4 distinct frames of 4 (934-962 of 1000 samples differ between
+  frames), RAW the identical 10 000 samples for every frame.
+
+So both are properties of the scope on firmware 00.01.05: a fixed ~22 ms per query, and deep-memory (RAW)
+readout that ignores the selected replay frame. Which acquisition the RAW data belongs to could not be
+determined; the frames differ only by noise and it matches all of them equally well.
+
+Open: UltraAcquire segments are browsed with "Navigate segments", not with record/replay, so the earlier
+UltraAcquire test used the wrong mechanism. Whether segments can be read by SCPI is untested.
 
 ## Other projects, run against the same scope (2026-09-27)
 
