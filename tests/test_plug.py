@@ -11,10 +11,15 @@ from rigol_dho_plug import RigolDhoPlug, Waveform
 
 # ── helpers ──────────────────────────────────────────────────
 
-def _plug(**kwargs):
-    """Create a RigolDhoPlug backed by a FakeDhoResource."""
+def _plug(restore_state=False, **kwargs):
+    """Create a RigolDhoPlug backed by a FakeDhoResource.
+
+    restore_state defaults to False so tests that are not about the restore
+    behaviour itself don't see the extra :SYST:SET?/:REC:WREC:ENAB? queries
+    that restore_state=True sends from __init__.
+    """
     fr = FakeDhoResource(**kwargs)
-    return RigolDhoPlug(resource=fr)
+    return RigolDhoPlug(resource=fr, restore_state=restore_state)
 
 
 # ── 1. idn() and measure() ──────────────────────────────────
@@ -303,3 +308,146 @@ def test_raw_is_refused_while_recording_is_enabled():
     assert len(plug.read_waveform(1, mode='NORM').raw) == 1000      # frames stay readable in NORM
     plug.write(':REC:WREC:ENAB OFF')
     assert len(plug.read_waveform(1, mode='RAW').raw) == 10000
+
+
+# ── setup, reset & state restore (SPEC-setup.md) ──────────────
+
+def test_check_errors_empty_and_queued():
+    p = _plug()
+    assert p.check_errors() == []
+    p._resource._error_queue.extend(['-222,"Data out of range"', '-100,"Command err"'])
+    assert p.check_errors() == ['-222,"Data out of range"', '-100,"Command err"']
+    assert p.check_errors() == []  # queue drained
+
+
+def test_write_checked():
+    p = _plug(reject={':TIM:MAIN:SCAL': '-222,"Data out of range"'})
+    with pytest.raises(RuntimeError, match=r':TIM:MAIN:SCAL'):
+        p.write_checked(':TIM:MAIN:SCAL 1E-3')
+    p.write_checked(':CHAN1:COUP DC')  # not rejected: passes
+    assert p.query(':CHAN1:COUP?') == 'DC'
+
+
+def test_apply_setup_happy_path():
+    p = _plug()
+    p.apply_setup({
+        ':TIM:MAIN:SCAL': 1e-3,
+        ':CHAN1:PROB': 10,
+        ':ACQ:MDEP': '1M',
+        ':CHAN1:COUP': 'DC',
+        ':TRIG:SWE': 'norm',
+        ':CHAN1:DISP': True,
+    })
+    assert p.memory_depth() == 1000000
+    assert float(p.query(':TIM:MAIN:SCAL?')) == pytest.approx(1e-3)
+    assert float(p.query(':CHAN1:PROB?')) == pytest.approx(10)
+    assert p.query(':CHAN1:COUP?') == 'DC'
+    assert p.query(':TRIG:SWE?') == 'NORM'
+    assert p.query(':CHAN1:DISP?') == '1'
+
+
+def test_apply_setup_one_rejected_header():
+    p = _plug(reject={':TRIG:SWE': '-222,"Data out of range"'})
+    with pytest.raises(RuntimeError, match=r':TRIG:SWE'):
+        p.apply_setup({
+            ':TIM:MAIN:SCAL': 1e-3,
+            ':TRIG:SWE': 'NORM',
+            ':CHAN1:COUP': 'DC',
+        })
+    assert p.query(':TRIG:SWE?') == 'AUTO'  # rejected write left the value unchanged
+    assert float(p.query(':TIM:MAIN:SCAL?')) == pytest.approx(1e-3)  # other items still applied
+    assert p.query(':CHAN1:COUP?') == 'DC'
+
+
+def test_apply_setup_invalidates_wav_cache():
+    p = _plug()
+    p.read_waveform(1)
+    p._resource.log.clear()
+    p.apply_setup({':CHAN1:COUP': 'DC'})
+    p._resource.log.clear()
+    p.read_waveform(1)
+    assert ':WAV:SOUR CHAN1' in p._resource.log  # setup re-sent, cache was invalidated
+
+
+def test_reset():
+    p = _plug(reject={':TIM:MAIN:SCAL': '-222,"Data out of range"'})
+    p.write(':TRIG:SWE NORM')
+    p.write(':TIM:MAIN:SCAL 1E-3')  # rejected: queues an error
+    assert p._resource._error_queue
+    p.reset()
+    assert p._resource._error_queue == []          # errors drained
+    assert p.query(':TRIG:SWE?') == 'AUTO'          # settings back to factory default
+    assert '*OPC?' not in p._resource.log
+
+
+def test_wait_stopped_returns_after_single():
+    p = _plug(status='STOP')
+    p.single()
+    p.wait_stopped(timeout_s=1.0, poll_s=0.01)  # must not raise
+
+
+def test_wait_stopped_times_out_while_running():
+    p = _plug(status='RUN')
+    with pytest.raises(TimeoutError):
+        p.wait_stopped(timeout_s=0.05, poll_s=0.01)
+
+
+def test_get_state_set_state_round_trip():
+    p = _plug()
+    initial = p.get_state()
+    p.write(':TRIG:SWE NORM')
+    p.write(':REC:WREC:ENAB ON')
+    assert p.query(':TRIG:SWE?') == 'NORM'
+    assert p.query(':REC:WREC:ENAB?') == '1'
+    p.set_state(initial)
+    assert p.query(':TRIG:SWE?') == 'AUTO'
+    assert p.query(':REC:WREC:ENAB?') == '0'
+
+
+def test_restore_state_true_restores_and_closes():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+    p.write(':TRIG:SWE NORM')
+    p.write(':REC:WREC:ENAB ON')
+    p.tearDown()
+    assert fr.closed
+    assert fr.query(':TRIG:SWE?') == 'AUTO'
+    assert fr.query(':REC:WREC:ENAB?') == '0'
+
+
+def test_restore_state_false_never_sends_syst_set():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    p.write(':TRIG:SWE NORM')
+    p.tearDown()
+    assert not any('SYST:SET' in entry for entry in fr.log)
+    assert fr.closed
+
+
+def test_teardown_restore_failure_still_closes():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+
+    def _boom(state):
+        raise RuntimeError('simulated restore failure')
+
+    p.set_state = _boom
+    p.tearDown()
+    assert fr.closed
+
+
+def test_apply_setup_reports_an_unknown_header_instead_of_crashing():
+    fr = FakeDhoResource()
+    plug = RigolDhoPlug(resource=fr, restore_state=False)
+    with pytest.raises(RuntimeError, match=':TRIG:EDGE:LEVL'):
+        plug.apply_setup({':TRIG:EDGE:LEVL': 1.0, ':TIM:MAIN:SCAL': 1e-3})
+    assert float(plug.query(':TIM:MAIN:SCAL?')) == pytest.approx(1e-3)   # later items still applied
+
+
+def test_set_state_ignores_errors_that_were_already_queued():
+    fr = FakeDhoResource(reject={':CHAN1:COUP': '-222,"Data out of range"'})
+    plug = RigolDhoPlug(resource=fr, restore_state=False)
+    state = plug.get_state()
+    plug.write(':CHAN1:COUP XYZ')          # leaves an error in the queue
+    plug.set_state(state)                  # must not raise
+    assert plug.check_errors() == []

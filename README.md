@@ -17,13 +17,48 @@ def phase(test, scope):
 Deep memory: `scope.set_memory_depth('1M'); scope.single()` … wait for `trigger_status() == 'STOP'` …
 `scope.read_waveform(1, mode='RAW')`.
 
+## Setting up a capture
+
+The plug stays thin: it has no per-setting setters. Test conditions are a dict of SCPI header -> value that
+lives in the test, not in the plug.
+
+```python
+CAPTURE = {':TIM:MAIN:SCAL': 1e-3, ':CHAN1:SCAL': 0.5, ':CHAN1:COUP': 'DC'}
+
+def phase(test, scope):
+    scope.reset()
+    scope.apply_setup(CAPTURE)   # writes each item, verifies the read-back, raises on any mismatch
+    ...
+```
+
+| method | behaviour |
+|---|---|
+| `check_errors()` | drains `:SYST:ERR?`, returns the error strings found |
+| `write_checked(cmd)` | `write()` then `check_errors()`, raises on any error |
+| `reset()` | `*RST`, waits, drains errors; never sends `*OPC?` (always `0` on this firmware) |
+| `wait_stopped(timeout_s=10.0)` | polls `trigger_status()` until `STOP` |
+| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag |
+| `apply_setup(setup)` | writes and verifies every item; raises `RuntimeError` naming every failure |
+
+By default the plug snapshots `get_state()` in `__init__` and calls `set_state()` in `tearDown()`, handing the
+scope back the way it found it (a failure to restore is logged, not raised, and never blocks closing the
+resource). Disable with `RigolDhoPlug(restore_state=False)` or the config key `rigol_dho_restore_state`;
+`bench_usb.py` disables it because it restores what it changes itself.
+
+Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
+- `*RST` restores factory defaults within 0.34 s; LAN settings survive it. `*OPC?` always returns `0`.
+- `:SYST:SET?` reads the whole setup as one binary block (2883 bytes, 33 ms); `:SYST:SET <block>` restores
+  it 0.03 s later, but **not** waveform recording — restore `:REC:WREC:ENAB` separately.
+- Read-back formats differ from what was written, e.g. `:TIM:MAIN:SCAL 1E-3` reads back `1.000000E-3`,
+  `:CHAN1:DISP ON` reads back `1`. Every query costs ~22 ms.
+
 ## Setup
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-.venv/bin/python -m pytest -q                              # 30 tests, no hardware needed
+.venv/bin/python -m pytest -q                              # 46 tests, no hardware needed
 .venv/bin/python example_test.py [--fake]
 .venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
 ```
@@ -114,6 +149,27 @@ for all, if scale, offset and timebase did not change).
 - `:MEAS:ITEM?` returns `9.9E+37` on the first query of an item and when the trace is clipped.
 - pyvisa-py names the device `USB0::6833::1101::<serial>::0::INSTR` (decimal vendor id).
 - Re-sending `:WAV:SOUR/MODE/FORM` costs ~80 ms per waveform; the plug caches the last setup.
+
+### Verified on the scope (2026-09-27)
+
+| Step | Time |
+|---|---|
+| `reset()` | 0.54 s |
+| `apply_setup()` of 15 settings | 1.8 s (two queries per setting) |
+| `tearDown()` with state restore, recording was on | 1.6 s |
+| `tearDown()` with state restore, recording was off | 0.5 s |
+
+- A value the scope clamps (`:TIM:MAIN:SCAL 5000` becomes 500) is reported through the read-back, without
+  any error from the scope. A bad value (`:CHAN1:COUP XYZ`) gives `-222,"Data out of range"`.
+- A header the scope does not know is never answered: the read-back times out (resource timeout, 10 s by
+  default) and `apply_setup` reports it together with `-100,"Command err"`.
+- About 0.9 s after a setup block is loaded the scope switches waveform recording off. `set_state` waits
+  1.2 s before switching it back on and checks that it stayed.
+
+`proto/capture.py` is a proposal, not wired into the plug: a readable, typed description of capture
+conditions (`Capture(timebase=1 * ms / div, ch1=Channel(scale=1 * V / div, ...), ...)`) that turns into the
+dict `apply_setup` takes. `proto/bad.py` holds seven deliberate mistakes; mypy, pyright and the runtime check
+each catch all seven.
 
 ## Memory and frame recording (measured 2026-09-27, one channel on)
 

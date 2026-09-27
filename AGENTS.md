@@ -12,3 +12,4 @@ OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 - Samples are always 16-bit: `read_waveform` defaults to `fmt='WORD'`; do not switch code to BYTE to save time or space.
 - To save memory and disk keep `Waveform.raw` (uint16) plus `Waveform.preamble`; do not store the float64 `t`/`v` arrays, recompute them (formulas in README).
 - When a measurement is meant to compare tools, do not drive the instrument with one of the tools under comparison. Use an independent control (`tools/bare_socket_check.py`) and say which confounders remain.
+- A fake instrument only knows what we told it. Acceptance on the real scope found two defects the 44 fake-based tests could not: an unknown header times out instead of answering, and the scope undoes `:REC:WREC:ENAB ON` ~0.9 s after a setup block. Every feature gets a run on hardware before it is called done, and each such finding goes back into the fake.

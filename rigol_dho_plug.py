@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import time
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
@@ -20,6 +22,46 @@ CONF.declare(
         'empty = first USB instrument with vendor 0x1AB1'
     ),
 )
+CONF.declare(
+    'rigol_dho_restore_state',
+    default_value=True,
+    description=(
+        'Restore the scope to the state it was in when the plug was created, '
+        'in tearDown()'
+    ),
+)
+
+
+def _parse_number(value) -> float | None:
+    """Parse int/float/str (with an optional k/M/G suffix) to a float, or None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.strip()
+        suffixes = {'k': 1e3, 'M': 1e6, 'G': 1e9}
+        if s and s[-1] in suffixes:
+            try:
+                return float(s[:-1]) * suffixes[s[-1]]
+            except ValueError:
+                return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    return None
+
+
+def _values_match(sent, readback: str) -> bool:
+    """Compare a value passed to apply_setup with the scope's read-back string."""
+    if isinstance(sent, bool):
+        return readback.strip() in (('1', 'ON') if sent else ('0', 'OFF'))
+    sent_num = _parse_number(sent)
+    read_num = _parse_number(readback)
+    if sent_num is not None and read_num is not None:
+        return math.isclose(sent_num, read_num, rel_tol=1e-6, abs_tol=1e-12)
+    return str(sent).strip().casefold() == readback.strip().casefold()
 
 
 class Waveform(NamedTuple):
@@ -31,11 +73,12 @@ class Waveform(NamedTuple):
 
 
 class RigolDhoPlug(BasePlug):
+    _RECORDING_RESTORE_DELAY_S = 1.2
     """OpenHTF plug wrapping a Rigol DHO scope via PyVISA."""
 
     auto_placeholder = True
 
-    def __init__(self, resource=None):
+    def __init__(self, resource=None, restore_state=None):
         self._rm = None
         if resource is not None:
             self._resource = resource
@@ -69,6 +112,11 @@ class RigolDhoPlug(BasePlug):
         self._resource.read_termination = '\n'
         self._resource.write_termination = '\n'
         self._wav_setup = None  # (channel, mode, fmt, n) last sent; skips ~100 ms of re-configuration
+
+        self._restore_state = (
+            CONF.rigol_dho_restore_state if restore_state is None else restore_state
+        )
+        self._initial_state = self.get_state() if self._restore_state else None
 
     # ── low-level ──────────────────────────────────────────────
 
@@ -223,9 +271,101 @@ class RigolDhoPlug(BasePlug):
 
         return Waveform(t=t, v=v, raw=raw, preamble=pre)
 
+    # ── setup, reset & state restore ────────────────────────────
+
+    def check_errors(self) -> list[str]:
+        """Read :SYST:ERR? until the code is 0 (at most 20 reads)."""
+        errors = []
+        for _ in range(20):
+            resp = self.query(':SYST:ERR?')
+            code = resp.split(',', 1)[0].strip()
+            if code == '0':
+                break
+            errors.append(resp)
+        return errors
+
+    def write_checked(self, cmd: str) -> None:
+        self.write(cmd)
+        errors = self.check_errors()
+        if errors:
+            raise RuntimeError(f'{cmd!r} produced errors: {errors}')
+
+    def reset(self) -> None:
+        """*RST the scope. No *OPC? (it always returns 0 on this firmware)."""
+        self.write('*RST')
+        time.sleep(0.5)
+        self.check_errors()
+        self._wav_setup = None
+
+    def wait_stopped(self, timeout_s: float = 10.0, poll_s: float = 0.05) -> None:
+        deadline = time.perf_counter() + timeout_s
+        while True:
+            if self.trigger_status() == 'STOP':
+                return
+            if time.perf_counter() >= deadline:
+                raise TimeoutError(
+                    f'Scope did not reach STOP within {timeout_s} s'
+                )
+            time.sleep(poll_s)
+
+    def get_state(self) -> dict:
+        block = self._resource.query_binary_values(
+            ':SYST:SET?', datatype='B', container=bytes
+        )
+        recording = self.query(':REC:WREC:ENAB?') == '1'
+        return {'block': block, 'recording': recording}
+
+    def set_state(self, state: dict) -> None:
+        self.check_errors()   # stale errors must not be blamed on the restore
+        self._resource.write_binary_values(
+            ':SYST:SET ', state['block'], datatype='B'
+        )
+        self._wav_setup = None
+        # The block does not carry the recording switch. Measured: about 0.9 s after a
+        # block is loaded the scope switches recording off, so switching it on earlier
+        # does not last. Wait, set it, then confirm that it stayed.
+        if state['recording']:
+            want = '1'
+            time.sleep(self._RECORDING_RESTORE_DELAY_S)
+            self.write(':REC:WREC:ENAB ON')
+            time.sleep(0.3)
+        else:
+            want = '0'
+            self.write(':REC:WREC:ENAB OFF')
+        if self.query(':REC:WREC:ENAB?') != want:
+            raise RuntimeError('set_state: recording switch was not restored')
+        errors = self.check_errors()
+        if errors:
+            raise RuntimeError(f'set_state produced errors: {errors}')
+
+    def apply_setup(self, setup: dict) -> None:
+        """Write and verify a dict of SCPI header -> int/float/bool/str value."""
+        failures = []
+        for key, value in setup.items():
+            sent = 'ON' if value is True else 'OFF' if value is False else value
+            self.write(f'{key} {sent}')
+            errors = self.check_errors()
+            try:
+                readback = self.query(f'{key}?')
+            except Exception as exc:  # noqa: BLE001 - an unknown header is never answered
+                readback = None
+                errors = errors + [f'no answer to {key}?: {type(exc).__name__}'] + self.check_errors()
+            if errors or not _values_match(value, readback):
+                failures.append(
+                    f'{key}: sent={value!r} readback={readback!r} errors={errors}'
+                )
+        self._wav_setup = None
+        if failures:
+            raise RuntimeError('apply_setup failed: ' + '; '.join(failures))
+
     # ── lifecycle ─────────────────────────────────────────────
 
     def tearDown(self) -> None:
+        if self._restore_state and self._initial_state is not None:
+            try:
+                self.set_state(self._initial_state)
+            except Exception as exc:  # noqa: BLE001 - must not block closing the resource
+                self.logger.warning('Failed to restore scope state: %s', exc)
         self._resource.close()
         if self._rm is not None:
             self._rm.close()

@@ -2,7 +2,43 @@
 
 from __future__ import annotations
 
+import pickle
+
 import numpy as np
+
+# Factory defaults for headers handled by the generic settings store (see
+# FakeDhoResource.write/query). Values written as Python numbers are formatted
+# as f'{x:.6E}' when read back; values written as strings are upper-cased as-is.
+DEFAULTS = {
+    ':TIM:MAIN:SCAL': 2e-6,
+    ':TIM:MAIN:OFFS': 0,
+    ':CHAN1:SCAL': 0.05,
+    ':CHAN1:OFFS': 0,
+    ':CHAN1:COUP': 'DC',
+    ':CHAN1:DISP': '1',
+    ':CHAN1:PROB': 1,
+    ':TRIG:EDGE:SOUR': 'CHAN1',
+    ':TRIG:EDGE:LEV': 0,
+    ':TRIG:EDGE:SLOP': 'POS',
+    ':TRIG:SWE': 'AUTO',
+    ':ACQ:TYPE': 'NORM',
+    ':TRIG:MODE': 'EDGE',
+    ':CHAN2:DISP': '0',
+    ':CHAN2:SCAL': 0.05,
+    ':CHAN2:OFFS': 0,
+    ':CHAN2:COUP': 'DC',
+    ':CHAN2:PROB': 1,
+    ':CHAN3:DISP': '0',
+    ':CHAN3:SCAL': 0.05,
+    ':CHAN3:OFFS': 0,
+    ':CHAN3:COUP': 'DC',
+    ':CHAN3:PROB': 1,
+    ':CHAN4:DISP': '0',
+    ':CHAN4:SCAL': 0.05,
+    ':CHAN4:OFFS': 0,
+    ':CHAN4:COUP': 'DC',
+    ':CHAN4:PROB': 1,
+}
 
 
 def _parse_depth(value: str) -> int:
@@ -14,10 +50,30 @@ def _parse_depth(value: str) -> int:
     return int(float(value))
 
 
+def _format_written(raw: str) -> str:
+    """Format a generic-store raw write value the way the scope reads it back."""
+    s = raw.strip()
+    if s.upper() in ('ON', 'OFF'):
+        return '1' if s.upper() == 'ON' else '0'
+    try:
+        return f'{float(s):.6E}'
+    except ValueError:
+        return s.upper()
+
+
+def _format_default(value) -> str:
+    """Format a DEFAULTS entry (typed, not a raw write string) for read-back."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f'{float(value):.6E}'
+    s = str(value).strip().upper()
+    return '1' if s == 'ON' else '0' if s == 'OFF' else s
+
+
 class FakeDhoResource:
     """Emulate the subset of PyVISA message-based interface needed by RigolDhoPlug."""
 
-    def __init__(self, status: str = 'RUN', memory_depth: int = 10000):
+    def __init__(self, status: str = 'RUN', memory_depth: int = 10000,
+                 reject: dict[str, str] | None = None):
         self.timeout = 10000
         self.chunk_size = 1024 * 1024
         self.read_termination = '\n'
@@ -35,13 +91,34 @@ class FakeDhoResource:
         self._sing_wait_count = 0  # tracks how many :TRIG:STAT? after SING
         self.closed = False
 
+        # Generic settings store, error queue and injected rejections
+        self._settings: dict[str, str] = {}
+        self._error_queue: list[str] = []
+        self._reject = reject or {}
+
     # ── write / query ─────────────────────────────────────────
 
     def write(self, cmd: str) -> None:
         self.log.append(cmd)
         cmd = cmd.strip()
 
-        if cmd == ':RUN':
+        header = cmd.split(None, 1)[0] if cmd else ''
+        if header in self._reject:
+            self._error_queue.append(self._reject[header])
+            return
+
+        if cmd == '*RST':
+            self._settings.clear()
+            self._error_queue.clear()
+            self._status = 'RUN'
+            self._recording = False
+            self._memory_depth = 10000
+            self._wav_mode = 'NORM'
+            self._wav_form = 'BYTE'
+            self._wav_star = 1
+            self._wav_stop = 1
+            self._sing_wait_count = 0
+        elif cmd == ':RUN':
             self._status = 'RUN'
         elif cmd == ':STOP':
             self._status = 'STOP'
@@ -68,6 +145,13 @@ class FakeDhoResource:
             self._wav_star = int(cmd.split()[1])
         elif cmd.startswith(':WAV:STOP '):
             self._wav_stop = int(cmd.split()[1])
+        else:
+            parts = cmd.split(None, 1)
+            if len(parts) == 2:
+                if parts[0] in DEFAULTS:
+                    self._settings[parts[0]] = parts[1]
+                else:   # the real scope rejects a header it does not know and never answers its query
+                    self._error_queue.append('-100,"Command err"')
 
     def query(self, cmd: str) -> str:
         self.log.append(cmd)
@@ -89,6 +173,10 @@ class FakeDhoResource:
             return '1' if self._recording else '0'
         if cmd == ':ACQ:MDEP?':
             return f'{self._memory_depth:.4E}'
+        if cmd == ':SYST:ERR?':
+            if self._error_queue:
+                return self._error_queue.pop(0)
+            return '0,"No error"'
 
         if cmd == ':WAV:PRE?':
             fmt_code = 0 if self._wav_form == 'BYTE' else 1
@@ -117,10 +205,25 @@ class FakeDhoResource:
         if cmd.startswith(':MEAS:ITEM?'):
             return '3.300000e+00'
 
+        if cmd.endswith('?'):
+            header = cmd[:-1]
+            if header in self._settings:
+                return _format_written(self._settings[header])
+            if header in DEFAULTS:
+                return _format_default(DEFAULTS[header])
+
         raise ValueError(f'Unknown query: {cmd}')
 
-    def query_binary_values(self, cmd: str, datatype: str, is_big_endian: bool, container):
+    def query_binary_values(self, cmd: str, datatype: str, is_big_endian: bool = False,
+                             container=list):
         self.log.append(cmd)
+        if cmd == ':SYST:SET?':
+            blob = {
+                'settings': dict(self._settings),
+                'memory_depth': self._memory_depth,
+                'status': self._status,
+            }
+            return container(pickle.dumps(blob))
         if cmd != ':WAV:DATA?':
             raise ValueError(f'Unexpected binary query: {cmd}')
 
@@ -134,6 +237,16 @@ class FakeDhoResource:
             data = np.array([(i * 257) % 65536 for i in range(start, stop + 1)], dtype=np.uint16)
 
         return container(data)
+
+    def write_binary_values(self, message: str, values, datatype: str = 'B') -> None:
+        self.log.append(message)
+        if message.strip() != ':SYST:SET':
+            raise ValueError(f'Unexpected binary write: {message}')
+        blob = pickle.loads(bytes(values))
+        self._settings = dict(blob['settings'])
+        self._memory_depth = blob['memory_depth']
+        self._status = blob['status']
+        self._recording = False  # the setup block does not restore recording, like the real scope
 
     def close(self) -> None:
         self.closed = True

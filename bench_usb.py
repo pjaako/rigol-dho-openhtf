@@ -181,16 +181,17 @@ def main():
     args.chunks = _parse_chunks(args.chunks, [None, 1000000, 250000])
 
     # Create the plug
+    # restore_state=False: this script restores what it changes itself (see the finally block below).
     if args.fake:
         from fake_resource import FakeDhoResource
-        plug = RigolDhoPlug(resource=FakeDhoResource())
+        plug = RigolDhoPlug(resource=FakeDhoResource(), restore_state=False)
     elif args.resource:
         import pyvisa
         rm = pyvisa.ResourceManager('@py')
         resource = rm.open_resource(args.resource)
-        plug = RigolDhoPlug(resource=resource)
+        plug = RigolDhoPlug(resource=resource, restore_state=False)
     else:
-        plug = RigolDhoPlug()
+        plug = RigolDhoPlug(restore_state=False)
 
     # Save initial state
     initial_depth = plug.memory_depth()
