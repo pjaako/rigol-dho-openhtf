@@ -4,6 +4,7 @@ Usage:
     python bench_usb.py [--resource NAME] [--channel 1] [--repeats 20]
                         [--depths 10k,100k,1M,10M] [--chunks 250000,1000000]
                         [--out bench_results]
+    python bench_usb.py --fake --repeats 3 --depths 10k --chunks all,4000 --out <tmp>
 
 Do NOT run this against a scope you need right now.
 """
@@ -26,6 +27,22 @@ def _parse_list(value: str, default: list) -> list:
     return value.split(',')
 
 
+def _parse_chunks(value: str, default: list) -> list:
+    """Parse chunk list: integers or 'all' (meaning None/chunk_points=None)."""
+    items = _parse_list(value, default)
+    result = []
+    for item in items:
+        if item.lower() == 'all':
+            result.append(None)
+        else:
+            result.append(int(item))
+    return result
+
+
+def _fmt_depth(depth: str) -> str:
+    return depth
+
+
 def _percentile(data: list[float], pct: float) -> float:
     s = sorted(data)
     k = (len(s) - 1) * pct / 100.0
@@ -46,6 +63,18 @@ def _fmt_s(s: float) -> str:
 
 def _fmt_mib(n_bytes: int, s: float) -> str:
     return f'{n_bytes / (1024 * 1024) / s:.2f}'
+
+
+def _print_table(results: list[dict], headers: list[str]):
+    """Print a real markdown table."""
+    print('| ' + ' | '.join(headers) + ' |')
+    print('|' + '|'.join('---' for _ in headers) + '|')
+    for r in results:
+        vals = []
+        for h in headers:
+            v = r.get(h, '')
+            vals.append(str(v) if v != '' else '')
+        print('| ' + ' | '.join(vals) + ' |')
 
 
 def bench(plug: RigolDhoPlug, args) -> list[dict]:
@@ -73,14 +102,15 @@ def bench(plug: RigolDhoPlug, args) -> list[dict]:
             times: list[float] = []
             for _ in range(args.repeats):
                 t0 = time.perf_counter()
-                plug.read_waveform(args.channel, 'NORM', fmt)
+                w = plug.read_waveform(args.channel, 'NORM', fmt)
                 times.append((time.perf_counter() - t0) * 1000)
-            n = plug.preamble()['points']
-            wfps = args.repeats / (statistics.median(times) / 1000)
+            points = len(w.raw)
+            median_ms = statistics.median(times)
+            wfps = 1000 / median_ms
             results.append({
                 'scenario': label,
-                'points': n,
-                'median_ms': _fmt_ms(statistics.median(times)),
+                'points': points,
+                'median_ms': _fmt_ms(median_ms),
                 'waveforms_s': f'{wfps:.1f}',
             })
         except Exception as exc:
@@ -90,10 +120,14 @@ def bench(plug: RigolDhoPlug, args) -> list[dict]:
     for depth in args.depths:
         for fmt in ('BYTE', 'WORD'):
             for chunk in args.chunks:
-                scenario = f'raw_{depth}_{fmt}_{chunk}'
+                chunk_label = 'all' if chunk is None else str(chunk)
+                scenario = f'raw_{_fmt_depth(depth)}_{fmt}_{chunk_label}'
                 try:
+                    # Set memory depth while running
+                    plug.run()
                     plug.set_memory_depth(depth)
-                    plug.single()
+                    time.sleep(0.05)
+                    plug.stop()
                     # Wait for STOP (timeout 10 s)
                     deadline = time.perf_counter() + 10
                     while time.perf_counter() < deadline:
@@ -102,6 +136,10 @@ def bench(plug: RigolDhoPlug, args) -> list[dict]:
                         time.sleep(0.05)
                     else:
                         plug.stop()
+
+                    # Skip chunk size larger than the record
+                    if chunk is not None and chunk > plug.memory_depth():
+                        continue
 
                     times: list[float] = []
                     for _ in range(3):
@@ -128,17 +166,28 @@ def bench(plug: RigolDhoPlug, args) -> list[dict]:
 def main():
     parser = argparse.ArgumentParser(description='Rigol DHO USB benchmark')
     parser.add_argument('--resource', default='', help='VISA resource name')
+    parser.add_argument('--fake', action='store_true', help='Use fake resource')
     parser.add_argument('--channel', type=int, default=1)
     parser.add_argument('--repeats', type=int, default=20)
     parser.add_argument('--depths', default='10k,100k,1M,10M')
-    parser.add_argument('--chunks', default='250000,1000000')
+    parser.add_argument('--chunks', default='all,1000000,250000')
     parser.add_argument('--out', default='bench_results')
     args = parser.parse_args()
 
     args.depths = _parse_list(args.depths, ['10k', '100k', '1M', '10M'])
-    args.chunks = _parse_list(args.chunks, ['250000', '1000000'])
+    args.chunks = _parse_chunks(args.chunks, [None, 1000000, 250000])
 
-    plug = RigolDhoPlug(resource=args.resource or None)
+    # Create the plug
+    if args.fake:
+        from fake_resource import FakeDhoResource
+        plug = RigolDhoPlug(resource=FakeDhoResource())
+    elif args.resource:
+        import pyvisa
+        rm = pyvisa.ResourceManager('@py')
+        resource = rm.open_resource(args.resource)
+        plug = RigolDhoPlug(resource=resource)
+    else:
+        plug = RigolDhoPlug()
 
     # Save initial state
     initial_depth = plug.memory_depth()
@@ -148,31 +197,22 @@ def main():
         results = bench(plug, args)
     finally:
         try:
+            plug.run()
             plug.set_memory_depth(initial_depth)
-            if initial_status == 'RUN':
-                plug.run()
-            else:
+            if initial_status == 'STOP':
                 plug.stop()
         except Exception:
             pass
         plug.tearDown()
 
-    # Print markdown table
+    # Collect all header names in order
     headers = ['scenario']
     for r in results:
         for k in r:
             if k != 'scenario' and k not in headers:
                 headers.append(k)
 
-    width = max(len(h) for h in headers)
-    row_fmt = ' | '.join('{:>' + str(width) + '}' for _ in headers)
-    sep = '-+-'.join('-' * width for _ in headers)
-
-    print(row_fmt.format(*headers))
-    print(sep)
-    for r in results:
-        vals = [r.get(h, '') for h in headers]
-        print(row_fmt.format(*vals))
+    _print_table(results, headers)
 
     # Write JSON
     os.makedirs(args.out, exist_ok=True)

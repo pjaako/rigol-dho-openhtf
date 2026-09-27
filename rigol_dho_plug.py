@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
@@ -34,24 +33,37 @@ class Waveform(NamedTuple):
 class RigolDhoPlug(BasePlug):
     """OpenHTF plug wrapping a Rigol DHO scope via PyVISA."""
 
+    auto_placeholder = True
+
     def __init__(self, resource=None):
+        self._rm = None
         if resource is not None:
             self._resource = resource
         else:
             import pyvisa
-            rm = pyvisa.ResourceManager('@py')
+            self._rm = pyvisa.ResourceManager('@py')
             if CONF.rigol_dho_resource:
                 resource_name = CONF.rigol_dho_resource
             else:
-                found = rm.list_resources('USB?*::0x1AB1::?*::INSTR')
-                if not found:
-                    rm.close()
+                found = self._rm.list_resources('USB?*::INSTR')
+                resource_name = None
+                for name in found:
+                    parts = name.split('::')
+                    if len(parts) >= 3:
+                        try:
+                            if int(parts[1], 0) == 0x1AB1:
+                                resource_name = name
+                                break
+                        except ValueError:
+                            pass
+                if resource_name is None:
+                    self._rm.close()
+                    self._rm = None
                     raise RuntimeError(
                         'No Rigol DHO scope found on USB. '
                         'Set --rigol_dho_resource or connect a scope.'
                     )
-                resource_name = found[0]
-            self._resource = rm.open_resource(resource_name)
+            self._resource = self._rm.open_resource(resource_name)
         self._resource.timeout = 10000
         self._resource.chunk_size = 1024 * 1024
         self._resource.read_termination = '\n'
@@ -82,10 +94,11 @@ class RigolDhoPlug(BasePlug):
     def trigger_status(self) -> str:
         return self.query(':TRIG:STAT?')
 
-    def memory_depth(self) -> str:
-        return self.query(':ACQ:MDEP?')
+    def memory_depth(self) -> int:
+        return int(float(self.query(':ACQ:MDEP?')))
 
-    def set_memory_depth(self, depth: str) -> None:
+    def set_memory_depth(self, depth) -> None:
+        # The scope rejects its own '1.0000E+05' format; ints and '100k'/'1E5' work.
         self.write(f':ACQ:MDEP {depth}')
 
     # ── measurements ──────────────────────────────────────────
@@ -116,7 +129,7 @@ class RigolDhoPlug(BasePlug):
         channel: int,
         mode: str = 'NORM',
         fmt: str = 'BYTE',
-        chunk_points: int = 1_000_000,
+        chunk_points: int = None,
     ) -> Waveform:
         # 1. Validate
         if channel not in (1, 2, 3, 4):
@@ -137,35 +150,55 @@ class RigolDhoPlug(BasePlug):
         self.write(f':WAV:MODE {mode}')
         self.write(f':WAV:FORM {fmt}')
 
-        # 4. Read preamble
-        pre = self.preamble()
-        n = pre['points']
+        # 4. Determine number of points
+        n = self.memory_depth() if mode == 'RAW' else 1000
 
-        # 5. Read samples in chunks
+        # 5. Set STAR/STOP then read preamble and verify points
+        self.write(':WAV:STAR 1')
+        self.write(f':WAV:STOP {n}')
+        pre = self.preamble()
+        if pre['points'] != n:
+            raise RuntimeError(
+                f'Expected {n} points, preamble says {pre["points"]}'
+            )
+
+        # 6. Read samples
         datatype = 'B' if fmt == 'BYTE' else 'H'
-        chunks: list[np.ndarray] = []
-        first = 1
-        while first <= n:
-            last = min(first + chunk_points - 1, n)
-            self.write(f':WAV:STAR {first}')
-            self.write(f':WAV:STOP {last}')
+
+        if chunk_points is None:
+            # Already set STAR 1 / STOP n above; one read of all n points
             data = self._resource.query_binary_values(
                 ':WAV:DATA?',
                 datatype=datatype,
                 is_big_endian=False,
                 container=np.array,
             )
-            chunks.append(data)
-            first = last + 1
+            raw = data
+        else:
+            # Chunked reads - override STAR/STOP per window
+            chunks: list[np.ndarray] = []
+            first = 1
+            while first <= n:
+                last = min(first + chunk_points - 1, n)
+                self.write(f':WAV:STAR {first}')
+                self.write(f':WAV:STOP {last}')
+                data = self._resource.query_binary_values(
+                    ':WAV:DATA?',
+                    datatype=datatype,
+                    is_big_endian=False,
+                    container=np.array,
+                )
+                chunks.append(data)
+                first = last + 1
+            raw = np.concatenate(chunks)
 
-        raw = np.concatenate(chunks)
         if len(raw) != n:
             raise RuntimeError(
                 f'Expected {n} samples, got {len(raw)}'
             )
 
-        # 6. Convert to volts and time
-        v = (raw.astype(np.float64) - pre['yorigin'] - pre['yreference']) * pre['yincrement']
+        # 7. Convert to volts and time (no yorigin per firmware 00.01.05)
+        v = (raw.astype(np.float64) - pre['yreference']) * pre['yincrement']
         t = (np.arange(n, dtype=np.float64) - pre['xreference']) * pre['xincrement'] + pre['xorigin']
 
         return Waveform(t=t, v=v, raw=raw, preamble=pre)
@@ -174,3 +207,6 @@ class RigolDhoPlug(BasePlug):
 
     def tearDown(self) -> None:
         self._resource.close()
+        if self._rm is not None:
+            self._rm.close()
+            self._rm = None

@@ -58,7 +58,7 @@ def test_read_waveform_byte():
     assert len(w.v) == 1000
     assert len(w.raw) == 1000
     assert w.raw[5] == 5
-    assert w.v[5] == pytest.approx((5 - 127) * 0.04)
+    assert w.v[5] == pytest.approx((5 - 128) * 0.04)
     assert w.t[0] == pytest.approx(-5e-4)
     assert w.t[1] - w.t[0] == pytest.approx(1e-6)
 
@@ -75,14 +75,15 @@ def test_read_waveform_word():
     assert w.v[0] == pytest.approx(expected_v0)
 
 
-# ── 5. Chunking ─────────────────────────────────────────────
+# ── 5. Chunking (RAW mode with memory_depth > chunk_points) ──
 
 def test_chunking():
-    p = _plug(points=2500)
-    w = p.read_waveform(1, chunk_points=1000)
+    p = _plug(memory_depth=2500, status='STOP')
+    w = p.read_waveform(1, mode='RAW', chunk_points=1000)
     log = p._resource.log
     star_stop = [l for l in log if l.startswith(':WAV:STAR ') or l.startswith(':WAV:STOP ')]
     assert star_stop == [
+        ':WAV:STAR 1', ':WAV:STOP 2500',
         ':WAV:STAR 1', ':WAV:STOP 1000',
         ':WAV:STAR 1001', ':WAV:STOP 2000',
         ':WAV:STAR 2001', ':WAV:STOP 2500',
@@ -101,7 +102,7 @@ def test_raw_while_running():
     # after stop it should work
     p.stop()
     w = p.read_waveform(1, mode='RAW')
-    assert len(w.raw) == 1000
+    assert len(w.raw) == 10000
 
 
 # ── 7. Invalid params ───────────────────────────────────────
@@ -137,6 +138,31 @@ def test_teardown():
     assert fr.closed
 
 
+# ── 10. auto_placeholder for with_plugs ──────────────────────
+
+def test_auto_placeholder():
+    assert RigolDhoPlug.auto_placeholder is True
+
+
+# ── 11. Fake trigger status delay ───────────────────────────
+
+def test_fake_trigger_status_delay():
+    fr = FakeDhoResource(status='READY')
+    p = RigolDhoPlug(resource=fr)
+    assert p.trigger_status() == 'READY'
+    fr.set_status('RUN')
+    assert p.trigger_status() == 'RUN'  # immediate when no delay
+
+
+# ── 12. MDEP suffix handling ─────────────────────────────────
+
+def test_mdep_k_suffix():
+    fr = FakeDhoResource(memory_depth=5000)
+    p = RigolDhoPlug(resource=fr)
+    p.set_memory_depth('5K')
+    assert p.memory_depth() == 5000
+
+
 # ── 9. OpenHTF integration ──────────────────────────────────
 
 def test_openhtf_integration():
@@ -156,3 +182,88 @@ def test_openhtf_integration():
     test = htf.Test(measure_vpp)
     result = test.execute(test_start=lambda: 'dut1')
     assert result is True
+
+
+# ── added in review: discovery, RAW windows, runnable scripts ──
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+class _StubRM:
+    def __init__(self, names):
+        self.names, self.opened, self.closed = names, None, False
+
+    def list_resources(self, pattern):
+        return tuple(self.names)
+
+    def open_resource(self, name):
+        self.opened = name
+        return FakeDhoResource()
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.parametrize('name', [
+    'USB0::6833::1101::DHO8A000000000::0::INSTR',
+    'USB0::0x1AB1::0x044D::DHO8A000000000::INSTR',
+])
+def test_discovery_matches_decimal_and_hex_vendor(monkeypatch, name):
+    import pyvisa
+    rm = _StubRM(['USB0::1234::1::OTHER::0::INSTR', name])
+    monkeypatch.setattr(pyvisa, 'ResourceManager', lambda backend: rm)
+    plug = RigolDhoPlug()
+    assert rm.opened == name
+    plug.tearDown()
+    assert rm.closed
+
+
+def test_discovery_no_scope(monkeypatch):
+    import pyvisa
+    monkeypatch.setattr(pyvisa, 'ResourceManager', lambda backend: _StubRM(['USB0::1234::1::X::0::INSTR']))
+    with pytest.raises(RuntimeError):
+        RigolDhoPlug()
+
+
+def test_raw_default_is_one_window_of_memory_depth():
+    fr = FakeDhoResource(status='STOP', memory_depth=2500)
+    w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW')
+    assert len(w.raw) == 2500
+    assert fr.log.count(':WAV:DATA?') == 1
+    assert ':WAV:STOP 2500' in fr.log
+    np.testing.assert_array_equal(w.raw, np.arange(2500) % 256)
+
+
+def test_raw_chunked_windows():
+    fr = FakeDhoResource(status='STOP', memory_depth=2500)
+    w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW', chunk_points=1000)
+    windows = [c for c in fr.log if c.startswith((':WAV:STAR', ':WAV:STOP'))][2:]
+    assert windows == [':WAV:STAR 1', ':WAV:STOP 1000', ':WAV:STAR 1001', ':WAV:STOP 2000',
+                       ':WAV:STAR 2001', ':WAV:STOP 2500']
+    np.testing.assert_array_equal(w.raw, np.arange(2500) % 256)
+
+
+def test_yorigin_is_ignored():
+    plug = _plug()
+    w = plug.read_waveform(1)
+    assert w.preamble['yorigin'] != 0
+    assert w.v[128] == pytest.approx(0.0)
+
+
+def test_bench_runs_in_fake_mode(tmp_path):
+    r = subprocess.run([sys.executable, 'bench_usb.py', '--fake', '--repeats', '3', '--depths', '10k',
+                        '--chunks', 'all,4000', '--out', str(tmp_path)], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert 'norm_byte' in r.stdout and 'raw_10k_BYTE_4000' in r.stdout and 'ERROR' not in r.stdout
+    assert isinstance(json.loads((tmp_path / 'bench.json').read_text()), list)
+
+
+def test_example_runs_in_fake_mode():
+    r = subprocess.run([sys.executable, 'example_test.py', '--fake'], cwd=ROOT, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert 'num_points=1000' in r.stdout
