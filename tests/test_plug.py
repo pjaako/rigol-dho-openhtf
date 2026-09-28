@@ -247,7 +247,7 @@ def test_raw_default_is_one_window_of_memory_depth():
 def test_raw_chunked_windows():
     fr = FakeDhoResource(status='STOP', memory_depth=2500)
     w = RigolDhoPlug(resource=fr).read_waveform(1, mode='RAW', chunk_points=1000, fmt='BYTE')
-    windows = [c for c in fr.log if c.startswith((':WAV:STAR', ':WAV:STOP'))][2:]
+    windows = [c for c in fr.log if c.startswith((':WAV:STAR ', ':WAV:STOP '))][2:]   # writes, not queries
     assert windows == [':WAV:STAR 1', ':WAV:STOP 1000', ':WAV:STAR 1001', ':WAV:STOP 2000',
                        ':WAV:STAR 2001', ':WAV:STOP 2500']
     np.testing.assert_array_equal(w.raw, np.arange(2500) % 256)
@@ -506,3 +506,48 @@ def test_screenshot_between_reads_keeps_the_waveform_setup():
 def test_fake_rejects_other_display_data_forms(cmd):
     with pytest.raises(ValueError):
         FakeDhoResource().query_binary_values(cmd, datatype='B', container=bytes)
+
+
+# ── waveform read settings survive a plug session ────────────
+
+_WAV_QUERIES = (':WAV:SOUR?', ':WAV:MODE?', ':WAV:FORM?', ':WAV:STAR?', ':WAV:STOP?')
+
+
+def test_fake_setup_block_does_not_restore_waveform_settings():
+    fr = FakeDhoResource()
+    block = fr.query_binary_values(':SYST:SET?', datatype='B', container=bytes)
+    fr.write(':WAV:MODE MAX')
+    fr.write(':WAV:STOP 500')
+    fr.write_binary_values(':SYST:SET ', block, datatype='B')
+    assert fr.query(':WAV:MODE?') == 'MAX'
+    assert fr.query(':WAV:STOP?') == '500'
+
+
+def test_teardown_restores_waveform_settings():
+    fr = FakeDhoResource(status='STOP')
+    for cmd in (':WAV:MODE RAW', ':WAV:FORM BYTE', ':WAV:STAR 1', ':WAV:STOP 10000', ':REC:WREC:ENAB ON'):
+        fr.write(cmd)
+    before = [fr.query(q) for q in _WAV_QUERIES]
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+    p.read_waveform(1)                     # NORM, WORD, 1..1000
+    assert [fr.query(q) for q in _WAV_QUERIES] != before
+    p.tearDown()
+    assert [fr.query(q) for q in _WAV_QUERIES] == before
+    assert fr.query(':REC:WREC:ENAB?') == '1'   # :WAV writes after the switch would have cost it
+    assert fr.log.index(':WAV:MODE RAW', fr.log.index(':SYST:SET ')) < fr.log.index(':WAV:STOP 10000', fr.log.index(':SYST:SET '))
+
+
+def test_set_state_raises_when_a_waveform_setting_does_not_stick():
+    p = _plug()
+    state = p.get_state()
+    state['wav'][':WAV:MODE'] = 'NONSENSE'   # the fake stores it; pretend the scope kept another value
+    p._resource.write = lambda cmd, _w=p._resource.write: None if cmd.startswith(':WAV:MODE') else _w(cmd)
+    with pytest.raises(RuntimeError, match=':WAV:MODE'):
+        p.set_state(state)
+
+
+def test_set_state_accepts_a_state_saved_without_waveform_settings():
+    p = _plug()
+    state = p.get_state()
+    del state['wav']
+    p.set_state(state)                     # must not raise

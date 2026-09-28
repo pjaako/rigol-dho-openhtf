@@ -122,7 +122,10 @@ class FakeDhoResource:
         # Configurable state
         self._status = status  # RUN / STOP / WAIT
         self._recording = False  # :REC:WREC:ENAB
+        self._block_loaded = False
+        self._recording_fragile = False  # switched on after a setup block: a :WAV write switches it off
         self._memory_depth = memory_depth
+        self._wav_sour = 'CHAN1'
         self._wav_mode = 'NORM'
         self._wav_form = 'BYTE'
         self._wav_star = 1
@@ -168,6 +171,8 @@ class FakeDhoResource:
         cmd = cmd.strip()
 
         header = cmd.split(None, 1)[0] if cmd else ''
+        if header.startswith(':WAV:') and self._recording_fragile:
+            self._recording = False   # seen on the real scope in 2 of 4 restores; here always
         if header in self._reject:
             self._error_queue.append(self._reject[header])
             return
@@ -192,14 +197,15 @@ class FakeDhoResource:
             self._sing_wait_count = 0
         elif cmd.startswith(':REC:WREC:ENAB '):
             self._recording = cmd.split()[1].upper() in ('ON', '1')
+            self._recording_fragile = self._recording and self._block_loaded
         elif cmd.startswith(':ACQ:MDEP '):
             value = cmd.split(None, 1)[1]
             if value.strip().upper() != 'AUTO':  # AUTO leaves the depth at whatever it resolved to
                 self._memory_depth = _parse_depth(value)
         elif cmd == ':WAV:SOUR':
             pass
-        elif cmd.startswith(':WAV:SOUR'):
-            pass
+        elif cmd.startswith(':WAV:SOUR '):
+            self._wav_sour = cmd.split(None, 1)[1]
         elif cmd == ':WAV:MODE':
             pass
         elif cmd.startswith(':WAV:MODE '):
@@ -244,6 +250,10 @@ class FakeDhoResource:
             if self._error_queue:
                 return self._error_queue.pop(0)
             return '0,"No error"'
+
+        if cmd in (':WAV:SOUR?', ':WAV:MODE?', ':WAV:FORM?', ':WAV:STAR?', ':WAV:STOP?'):
+            # like the real scope, the setup block (:SYST:SET) does not restore any of these
+            return str(getattr(self, '_wav_' + cmd[5:-1].lower()))
 
         if cmd == ':WAV:PRE?':
             fmt_code = 0 if self._wav_form == 'BYTE' else 1
@@ -314,6 +324,7 @@ class FakeDhoResource:
         self._memory_depth = blob['memory_depth']
         self._status = blob['status']
         self._recording = False  # the setup block does not restore recording, like the real scope
+        self._block_loaded = True
 
     def close(self) -> None:
         self.closed = True

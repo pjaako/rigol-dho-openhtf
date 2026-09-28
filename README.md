@@ -37,7 +37,7 @@ def phase(test, scope):
 | `write_checked(cmd)` | `write()` then `check_errors()`, raises on any error |
 | `reset()` | `*RST`, waits, drains errors; never sends `*OPC?` (always `0` on this firmware) |
 | `wait_stopped(timeout_s=10.0)` | polls `trigger_status()` until `STOP` |
-| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag |
+| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag and the `:WAV` read settings |
 | `screenshot(path=None)` | the scope screen as PNG bytes (`:DISP:DATA? PNG`); also written to `path` if given; `RuntimeError` if the answer is not a complete PNG |
 | `apply_setup(setup)` | writes and verifies every item; raises `RuntimeError` naming every failure |
 
@@ -59,7 +59,7 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest pyyaml jsonschema matplotlib
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-.venv/bin/python -m pytest -q                              # 141 tests, no hardware needed
+.venv/bin/python -m pytest -q                              # 145 tests, no hardware needed
 .venv/bin/python example_test.py [--fake]
 .venv/bin/python examples/operator_demo.py [--fake]        # web GUI on port 4444, see examples/README.md
 .venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
@@ -156,8 +156,16 @@ for all, if scale, offset and timebase did not change).
   setting and queues no error. While stopped, consecutive screenshots are byte-identical and the waveform
   read before and after is the same, so a screenshot taken between `read_waveform()` and `run()` shows the
   capture that was read. Other arguments of `:DISP:DATA?` were not tried.
-- The setup block does not carry `:WAV:MODE`: it was `RAW` before a plug session and `NORM` after the
-  restore (seen once, 2026-09-28). `tearDown()` does not put it back.
+- The setup block does not carry the waveform read settings: `:WAV:MODE`, `:WAV:FORM`, `:WAV:STAR` and
+  `:WAV:STOP` kept their changed values after the block was loaded (2 runs, read 2 s after the load,
+  2026-09-28). `get_state()` reads them and `:WAV:SOUR`, `set_state()` writes them back after the block, mode
+  first, and checks the read-back. `:WAV:SOUR CHAN2` was not accepted while channel 2 was off, so whether the
+  block carries the source is not known.
+- Order matters in a restore. With the `:WAV` settings written after the recording switch, recording was
+  found off again in 2 of 4 restores; written before it, in 0 of 9. In steady state (no block loaded just
+  before) no `:WAV` command switched recording off in 10 tries, so the cause is the timing after a block
+  load, not the commands themselves. `tearDown()` with recording on now takes 2.6 to 4.4 s (6 runs); it was
+  1.6 s before the `:WAV` settings were restored.
 
 ### Verified on the scope (2026-09-27)
 

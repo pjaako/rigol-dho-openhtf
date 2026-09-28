@@ -79,6 +79,8 @@ class Waveform(NamedTuple):
 
 class RigolDhoPlug(BasePlug):
     _RECORDING_RESTORE_DELAY_S = 1.2
+    # Not carried by the setup block (measured). MODE comes before STAR/STOP: it decides their range.
+    _WAV_HEADERS = (':WAV:SOUR', ':WAV:MODE', ':WAV:FORM', ':WAV:STAR', ':WAV:STOP')
     """OpenHTF plug wrapping a Rigol DHO scope via PyVISA."""
 
     auto_placeholder = True
@@ -335,7 +337,8 @@ class RigolDhoPlug(BasePlug):
             ':SYST:SET?', datatype='B', container=bytes
         )
         recording = self.query(':REC:WREC:ENAB?') == '1'
-        return {'block': block, 'recording': recording}
+        wav = {header: self.query(f'{header}?') for header in self._WAV_HEADERS}
+        return {'block': block, 'recording': recording, 'wav': wav}
 
     def set_state(self, state: dict) -> None:
         self.check_errors()   # stale errors must not be blamed on the restore
@@ -343,7 +346,15 @@ class RigolDhoPlug(BasePlug):
             ':SYST:SET ', state['block'], datatype='B'
         )
         self._wav_setup = None
-        # The block does not carry the recording switch. Measured: about 0.9 s after a
+        # The block does not carry the waveform read settings. They go before the recording
+        # switch: written after it, recording was found off again in 2 of 4 restores.
+        wav = state.get('wav', {})
+        for header, value in wav.items():
+            self.write(f'{header} {value}')
+        not_restored = [h for h, value in wav.items() if self.query(f'{h}?') != value]
+        if not_restored:
+            raise RuntimeError(f'set_state: not restored: {not_restored}')
+        # The block does not carry the recording switch either. Measured: about 0.9 s after a
         # block is loaded the scope switches recording off, so switching it on earlier
         # does not last. Wait, set it, then confirm that it stayed.
         if state['recording']:

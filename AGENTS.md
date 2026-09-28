@@ -18,6 +18,7 @@ OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 - Set OpenHTF config keys after importing the plug module (`CONF.load(...)` before the key is declared is lost).
 - Run `mypy --strict capture.py` with a checker from outside the project venv; it must stay clean.
 - Machine comparison uses `golden.py` (mask around a taught reference). A golden file is valid only for the capture file, probe and scope it was taught with; `compare` refuses anything else. Do not loosen those checks to make a test pass.
+- When `set_state` learns to restore one more thing, check on hardware that everything it restored before still holds 5 s later: restoring the `:WAV` settings after the recording switch cost the recording switch, and only the run on the scope showed it.
 - To exercise a running OpenHTF station without a browser use `tools/operator_robot.py <answer> [<answer> ...]`.
 - OpenHTF's operator prompt shows one image (`image_url`), a text field and one button. Two images need one composite picture; two buttons do not exist in stock OpenHTF 1.6.1.
 - Screen capture: `:DISP:DATA? PNG` returns the scope screen as an IEEE-488.2 block (about 120 KB, 1024x600), measured over the raw socket on 2026-09-27. The plug method is `screenshot(path=None)`; take it while stopped, between `read_waveform` and `run`, so that picture and samples show the same capture.
