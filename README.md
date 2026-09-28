@@ -361,3 +361,7 @@ capture with a golden reference (mask) · `captures/` capture files · `tests/` 
 `tests/data/broken.yaml`) · `bench_usb.py` · `example_test.py` · `udev/` · `tools/bare_socket_check.py` ·
 `.vscode/settings.json` YAML schema mapping for VS Code ·
 `SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md` the original specs (superseded where this README differs).
+
+## Licence
+
+MIT, see `LICENSE`. Use it for anything; keep the copyright notice.
