@@ -1,5 +1,6 @@
+import os
 import socket, time, struct
-s = socket.create_connection(("192.0.2.10", 5555), 10); s.settimeout(60); s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+s = socket.create_connection((os.environ.get("SCOPE_HOST", "192.0.2.10"), 5555), 10); s.settimeout(60); s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 def w(c): s.sendall(c.encode() + b"\n")
 def rexact(n):
     b = bytearray()

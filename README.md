@@ -362,6 +362,9 @@ capture with a golden reference (mask) · `captures/` capture files · `tests/` 
 `.vscode/settings.json` YAML schema mapping for VS Code ·
 `SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md` the original specs (superseded where this README differs).
 
+Addresses such as `192.0.2.10` in this document are placeholders: use the address of your own scope.
+Scripts in `tools/` read it from `SCOPE_HOST`.
+
 ## Licence
 
 MIT, see `LICENSE`. Use it for anything; keep the copyright notice.
