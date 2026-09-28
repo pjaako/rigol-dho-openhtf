@@ -22,6 +22,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import openhtf as htf
+from PIL import Image
 from openhtf.output.callbacks import json_factory
 from openhtf.output.servers import station_server
 from openhtf.plugs import user_input
@@ -43,7 +44,7 @@ class FakePlug(RigolDhoPlug):
 
 def plot_png(w, title: str) -> bytes:
     """Render the waveform the way the operator should judge it: volts over milliseconds."""
-    fig, ax = plt.subplots(figsize=(9, 4.2), dpi=100)
+    fig, ax = plt.subplots(figsize=(10.24, 4.2), dpi=100)
     ax.plot(w.t * 1e3, w.v, linewidth=1.0, color='#c8a000')
     ax.set_xlabel('time, ms')
     ax.set_ylabel('voltage, V')
@@ -54,6 +55,19 @@ def plot_png(w, title: str) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format='png')
     plt.close(fig)
+    return buf.getvalue()
+
+
+def composite_png(screen_png: bytes, plot_png: bytes) -> bytes:
+    """One picture for the prompt (stock OpenHTF shows one image): the scope screen on top, the plot below.
+    Both are 1024 px wide, so neither is scaled."""
+    screen = Image.open(io.BytesIO(screen_png)).convert('RGB')
+    plot = Image.open(io.BytesIO(plot_png)).convert('RGB')
+    out = Image.new('RGB', (screen.width, screen.height + plot.height))
+    out.paste(screen, (0, 0))
+    out.paste(plot, (0, screen.height))
+    buf = io.BytesIO()
+    out.save(buf, format='PNG')
     return buf.getvalue()
 
 
@@ -69,6 +83,7 @@ def capture_waveform(test, scope):
     scope.single()
     scope.wait_stopped(timeout_s=5)
     w = scope.read_waveform(1)
+    screen = scope.screenshot()   # before run(): the screen still shows the capture that was read
     scope.run()
     test.measurements.vpp = float(w.v.max() - w.v.min())
     test.measurements.frequency = frequency_hz(w)
@@ -77,8 +92,9 @@ def capture_waveform(test, scope):
     title = f'CH1   Vpp {test.measurements.vpp:.3f} V   f {test.measurements.frequency:.1f} Hz'
     png = plot_png(w, title)
     test.attach('waveform.png', png, 'image/png')
+    test.attach('screen.png', screen, 'image/png')
     test.attach('waveform.npz', waveform_npz_bytes(w), 'application/octet-stream')
-    test.state['waveform_png'] = png
+    test.state['prompt_png'] = composite_png(screen, png)
     test.state['waveform_title'] = title
 
 
@@ -88,7 +104,7 @@ def capture_waveform(test, scope):
 @htf.plug(prompts=user_input.UserInput)
 def operator_judges(test, prompts):
     """Show the waveform and ask the operator."""
-    image = 'data:image/png;base64,' + base64.b64encode(test.state['waveform_png']).decode('ascii')
+    image = 'data:image/png;base64,' + base64.b64encode(test.state['prompt_png']).decode('ascii')
     message = f"{test.state['waveform_title']}\n\nIs this waveform good? Type P (pass) or F (fail)."
     while True:
         answer = prompts.prompt(message, text_input=True, image_url=image).strip().upper()

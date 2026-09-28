@@ -451,3 +451,58 @@ def test_set_state_ignores_errors_that_were_already_queued():
     plug.write(':CHAN1:COUP XYZ')          # leaves an error in the queue
     plug.set_state(state)                  # must not raise
     assert plug.check_errors() == []
+
+
+# ── screenshot ───────────────────────────────────────────────
+
+def _png_size(data: bytes) -> tuple[int, int]:
+    import struct
+    return struct.unpack('>II', data[16:24])   # IHDR width, height
+
+
+def test_screenshot_returns_png_bytes():
+    shot = _plug().screenshot()
+    assert isinstance(shot, bytes)
+    assert shot[:8] == b'\x89PNG\r\n\x1a\n'
+    assert _png_size(shot) == (1024, 600)
+
+
+def test_screenshot_writes_the_returned_bytes_to_path(tmp_path):
+    target = tmp_path / 'screen.png'
+    shot = _plug().screenshot(target)
+    assert target.read_bytes() == shot
+
+
+def test_screenshot_sends_only_the_display_query():
+    p = _plug()
+    before = len(p._resource.log)
+    p.screenshot()
+    assert p._resource.log[before:] == [':DISP:DATA? PNG']
+
+
+def test_screenshot_rejects_a_non_png_and_writes_nothing(tmp_path):
+    target = tmp_path / 'screen.png'
+    with pytest.raises(RuntimeError):
+        _plug(screen=b'not a png').screenshot(target)
+    assert not target.exists()
+
+
+def test_screenshot_rejects_a_truncated_png():
+    whole = FakeDhoResource().query_binary_values(':DISP:DATA? PNG', datatype='B', container=bytes)
+    with pytest.raises(RuntimeError):
+        _plug(screen=whole[:-20]).screenshot()
+
+
+def test_screenshot_between_reads_keeps_the_waveform_setup():
+    p = _plug()
+    p.read_waveform(1)
+    p.screenshot()
+    before = len(p._resource.log)
+    p.read_waveform(1)
+    assert not any(':WAV:SOUR' in c for c in p._resource.log[before:])
+
+
+@pytest.mark.parametrize('cmd', [':DISP:DATA? BMP', ':DISP:DATA?'])
+def test_fake_rejects_other_display_data_forms(cmd):
+    with pytest.raises(ValueError):
+        FakeDhoResource().query_binary_values(cmd, datatype='B', container=bytes)

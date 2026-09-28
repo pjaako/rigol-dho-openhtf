@@ -16,7 +16,7 @@ shows the waveform to the operator and records the operator's PASS / FAIL.
 Open `http://<address of this machine>:4444` (the server listens on all interfaces).
 
 1. Enter a DUT id. The test starts.
-2. The waveform appears with Vpp and frequency in the title.
+2. The scope's screen appears with the plotted waveform (Vpp and frequency in its title) below it, in one picture.
 3. Type `P` or `PASS`, `F` or `FAIL`. Anything else is asked again.
 4. The result is shown in the GUI and the next test waits for a DUT id. `--once` stops after one test.
 
@@ -29,13 +29,17 @@ What is recorded per test, in `examples/results/<dut>.<time>.json`:
 | `num_points` | samples read | none |
 | `operator_verdict` | the operator's answer | must be `PASS` |
 
-Attachments: `waveform.png` (what the operator saw) and `waveform.npz` (16-bit raw samples plus the
+Attachments: `waveform.png` (the plot), `screen.png` (the scope screen, taken after the read and before the scope
+is set running again; the picture the operator saw is these two stacked, not attached) and `waveform.npz` (16-bit raw samples plus the
 preamble, from which volts and time can be rebuilt).
 
 The scope is returned to the state it was found in after every test.
 
 Checked on 2026-09-28 from a browser on another machine, with the fake and with the real DHO814: a FAIL
 answer, a PASS answer and a wrong answer that is asked again.
+The picture above predates the scope screen in the prompt. With the screen (2026-09-28) the demo was run on
+the real DHO814 with `tools/operator_robot.py` in place of the operator: prompt image 1024 x 1020, 154 KB as
+base64, verdict PASS, scope restored. It has not been looked at in a browser yet.
 
 Options: `--port N` (default 4444), `--once`, `--fake`, `--resource NAME`.
 Requires `matplotlib` in addition to the project's packages.

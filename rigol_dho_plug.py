@@ -276,6 +276,23 @@ class RigolDhoPlug(BasePlug):
 
         return Waveform(t=t, v=v, raw=raw, preamble=pre)
 
+    # ── screenshot ────────────────────────────────────────────
+
+    def screenshot(self, path: str | Path | None = None) -> bytes:
+        """Return the scope screen as PNG bytes (1024x600 RGBA on the DHO814); also write it to `path` if given.
+
+        Read-only on the scope and independent of the waveform setup, so it does not reset `_wav_setup`."""
+        data = self._resource.query_binary_values(
+            ':DISP:DATA? PNG', datatype='B', container=bytes
+        )
+        if data[:8] != b'\x89PNG\r\n\x1a\n' or data[-8:-4] != b'IEND':
+            raise RuntimeError(
+                f'Scope screen is not a complete PNG ({len(data)} bytes, starts {data[:8]!r})'
+            )
+        if path is not None:
+            Path(path).write_bytes(data)
+        return data
+
     # ── setup, reset & state restore ────────────────────────────
 
     def check_errors(self) -> list[str]:

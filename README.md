@@ -38,6 +38,7 @@ def phase(test, scope):
 | `reset()` | `*RST`, waits, drains errors; never sends `*OPC?` (always `0` on this firmware) |
 | `wait_stopped(timeout_s=10.0)` | polls `trigger_status()` until `STOP` |
 | `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag |
+| `screenshot(path=None)` | the scope screen as PNG bytes (`:DISP:DATA? PNG`); also written to `path` if given; `RuntimeError` if the answer is not a complete PNG |
 | `apply_setup(setup)` | writes and verifies every item; raises `RuntimeError` naming every failure |
 
 By default the plug snapshots `get_state()` in `__init__` and calls `set_state()` in `tearDown()`, handing the
@@ -58,7 +59,7 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest pyyaml jsonschema matplotlib
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-.venv/bin/python -m pytest -q                              # 129 tests, no hardware needed
+.venv/bin/python -m pytest -q                              # 141 tests, no hardware needed
 .venv/bin/python example_test.py [--fake]
 .venv/bin/python examples/operator_demo.py [--fake]        # web GUI on port 4444, see examples/README.md
 .venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
@@ -150,6 +151,13 @@ for all, if scale, offset and timebase did not change).
 - `:MEAS:ITEM?` returns `9.9E+37` on the first query of an item and when the trace is clipped.
 - pyvisa-py names the device `USB0::6833::1101::<serial>::0::INSTR` (decimal vendor id).
 - Re-sending `:WAV:SOUR/MODE/FORM` costs ~80 ms per waveform; the plug caches the last setup.
+- **Screen capture** (measured 2026-09-28 over LAN, bare socket and PyVISA): `:DISP:DATA? PNG` answers with a
+  `#9` block holding a complete PNG, 1024 x 600, 8-bit RGBA, 73 to 116 KB, in 214 to 304 ms. It changes no
+  setting and queues no error. While stopped, consecutive screenshots are byte-identical and the waveform
+  read before and after is the same, so a screenshot taken between `read_waveform()` and `run()` shows the
+  capture that was read. Other arguments of `:DISP:DATA?` were not tried.
+- The setup block does not carry `:WAV:MODE`: it was `RAW` before a plug session and `NORM` after the
+  restore (seen once, 2026-09-28). `tearDown()` does not put it back.
 
 ### Verified on the scope (2026-09-27)
 
@@ -360,7 +368,7 @@ front end for capture conditions · `capture.schema.json` its generated JSON Sch
 capture with a golden reference (mask) · `captures/` capture files · `tests/` (including
 `tests/data/broken.yaml`) · `bench_usb.py` · `example_test.py` · `udev/` · `tools/bare_socket_check.py` ·
 `.vscode/settings.json` YAML schema mapping for VS Code ·
-`SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md` the original specs (superseded where this README differs).
+`SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md`/`SPEC-golden.md`/`SPEC-screenshot.md` the original specs (superseded where this README differs).
 
 Addresses such as `192.0.2.10` in this document are placeholders: use the address of your own scope.
 Scripts in `tools/` read it from `SCOPE_HOST`.

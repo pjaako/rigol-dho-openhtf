@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pickle
+import struct
+import zlib
 
 import numpy as np
 
@@ -83,17 +85,34 @@ _DEFECTS = (None, 'shift', 'gain', 'glitch')
 _SIGNALS = (None, 'clock')
 
 
+def _png_chunk(kind: bytes, body: bytes) -> bytes:
+    return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', zlib.crc32(kind + body))
+
+
+def _screen_png(width: int = 1024, height: int = 600) -> bytes:
+    """A valid 1024x600 RGBA PNG (dark background, grid), standard library only."""
+    dark, grid = b'\x10\x10\x18\xff', b'\x50\x50\x60\xff'
+    plain = b'\x00' + dark * width      # each scanline starts with filter type 0
+    gridline = b'\x00' + grid * width
+    ruled = b'\x00' + b''.join(grid if x % 100 == 0 else dark for x in range(width))
+    rows = b''.join(gridline if y % 75 == 0 else ruled if y % 2 else plain for y in range(height))
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+    return (b'\x89PNG\r\n\x1a\n' + _png_chunk(b'IHDR', ihdr)
+            + _png_chunk(b'IDAT', zlib.compress(rows)) + _png_chunk(b'IEND', b''))
+
+
 class FakeDhoResource:
     """Emulate the subset of PyVISA message-based interface needed by RigolDhoPlug."""
 
     def __init__(self, status: str = 'RUN', memory_depth: int = 10000,
                  reject: dict[str, str] | None = None, defect: str | None = None,
-                 signal: str | None = None):
+                 signal: str | None = None, screen: bytes | None = None):
         self.timeout = 10000
         self.chunk_size = 1024 * 1024
         self.read_termination = '\n'
         self.write_termination = '\n'
         self.log: list[str] = []
+        self._screen = screen if screen is not None else _screen_png()  # answer to :DISP:DATA? PNG
 
         if defect not in _DEFECTS:
             raise ValueError(f'defect must be one of {_DEFECTS}, got {defect!r}')
@@ -272,6 +291,8 @@ class FakeDhoResource:
                 'status': self._status,
             }
             return container(pickle.dumps(blob))
+        if cmd == ':DISP:DATA? PNG':
+            return container(self._screen)
         if cmd != ':WAV:DATA?':
             raise ValueError(f'Unexpected binary query: {cmd}')
 
