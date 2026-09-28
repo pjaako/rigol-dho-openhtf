@@ -5,7 +5,7 @@
 An OpenHTF station with the web GUI: it sets the scope up from `captures/clock.yaml`, captures channel 1,
 shows the waveform to the operator and records the operator's PASS / FAIL.
 
-![operator prompt with the captured waveform](operator_demo.jpg)
+![operator prompt with the scope screen above the plotted waveform](operator_demo.jpg)
 
 ```bash
 .venv/bin/python examples/operator_demo.py --fake                                    # no hardware
@@ -37,9 +37,10 @@ The scope is returned to the state it was found in after every test.
 
 Checked on 2026-09-28 from a browser on another machine, with the fake and with the real DHO814: a FAIL
 answer, a PASS answer and a wrong answer that is asked again.
-The picture above predates the scope screen in the prompt. With the screen (2026-09-28) the demo was run on
-the real DHO814 with `tools/operator_robot.py` in place of the operator: prompt image 1024 x 1020, 154 KB as
-base64, verdict PASS, scope restored. It has not been looked at in a browser yet.
+With the scope screen in the prompt (picture above, 2026-09-28): run on the real DHO814 with
+`tools/operator_robot.py` in place of the operator, and looked at in Chrome on another machine. The prompt
+image is 1024 x 1020, 154 KB as base64; in a window 1400 x 860 the picture, the question and the answer field
+fit without scrolling. Verdict PASS, scope restored.
 
 Options: `--port N` (default 4444), `--once`, `--fake`, `--resource NAME`.
 Requires `matplotlib` in addition to the project's packages.
