@@ -14,6 +14,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # for `import common`; 'examples' collides
+# with a package of the same name in site-packages, so this can't be `from examples.common import ...`
 
 import matplotlib
 matplotlib.use('Agg')
@@ -25,6 +27,7 @@ from openhtf.output.servers import station_server
 from openhtf.plugs import user_input
 from openhtf.util import configuration, units
 
+from common import frequency_hz, waveform_npz_bytes
 from rigol_dho_plug import RigolDhoPlug
 
 CAPTURE = ROOT / 'captures' / 'clock.yaml'
@@ -54,22 +57,6 @@ def plot_png(w, title: str) -> bytes:
     return buf.getvalue()
 
 
-def frequency_hz(w) -> float:
-    """Frequency from rising edges through the mid level, with hysteresis against noise on the edges."""
-    lo, hi = np.percentile(w.v, 5), np.percentile(w.v, 95)
-    if hi - lo < 1e-3:
-        return 0.0
-    low_thr, high_thr = lo + 0.3 * (hi - lo), lo + 0.7 * (hi - lo)
-    edges, armed = [], False
-    for t, v in zip(w.t, w.v):
-        if v < low_thr:
-            armed = True
-        elif v > high_thr and armed:
-            edges.append(t)
-            armed = False
-    return float(1 / np.mean(np.diff(edges))) if len(edges) > 1 else 0.0
-
-
 @htf.measures(
     htf.Measurement('vpp').with_units(units.VOLT),
     htf.Measurement('frequency').with_units(units.HERTZ),
@@ -90,10 +77,7 @@ def capture_waveform(test, scope):
     title = f'CH1   Vpp {test.measurements.vpp:.3f} V   f {test.measurements.frequency:.1f} Hz'
     png = plot_png(w, title)
     test.attach('waveform.png', png, 'image/png')
-    # raw samples + preamble are enough to rebuild volts and time, and 4x smaller than the float arrays
-    npz = io.BytesIO()
-    np.savez_compressed(npz, raw=w.raw, **w.preamble)
-    test.attach('waveform.npz', npz.getvalue(), 'application/octet-stream')
+    test.attach('waveform.npz', waveform_npz_bytes(w), 'application/octet-stream')
     test.state['waveform_png'] = png
     test.state['waveform_title'] = title
 

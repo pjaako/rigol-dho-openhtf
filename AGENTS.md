@@ -17,3 +17,5 @@ OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 - Hand-written hardware checks must wrap the work in `try: ... finally: plug.tearDown()`. One check raised halfway and left the user's scope reset; it was recovered from `setups/user_setup_2026-09-27.bin`. OpenHTF itself always calls `tearDown`.
 - Set OpenHTF config keys after importing the plug module (`CONF.load(...)` before the key is declared is lost).
 - Run `mypy --strict capture.py` with a checker from outside the project venv; it must stay clean.
+- Machine comparison uses `golden.py` (mask around a taught reference). A golden file is valid only for the capture file, probe and scope it was taught with; `compare` refuses anything else. Do not loosen those checks to make a test pass.
+- To exercise a running OpenHTF station without a browser use `tools/operator_robot.py <answer> [<answer> ...]`.

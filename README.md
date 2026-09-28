@@ -58,7 +58,7 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest pyyaml jsonschema matplotlib
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-.venv/bin/python -m pytest -q                              # 100 tests, no hardware needed
+.venv/bin/python -m pytest -q                              # 129 tests, no hardware needed
 .venv/bin/python example_test.py [--fake]
 .venv/bin/python examples/operator_demo.py [--fake]        # web GUI on port 4444, see examples/README.md
 .venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
@@ -233,6 +233,31 @@ Capture(timebase=1 * ms / div, ch1=Channel(scale=1 * V / div, offset=-1.5 * V),
         trigger=Edge(source='ch1', level=1.5 * V))
 ```
 
+## Comparing with a golden waveform
+
+`golden.py` decides PASS/FAIL by comparing a capture with a reference taught from known-good captures,
+instead of asking an operator: a mask around the reference, widened by a voltage tolerance and a time
+tolerance. `golden.teach(waveforms)` builds a `Golden` (reference + mask) from at least three good
+captures; `golden.compare(waveform, golden)` checks a new capture against it and refuses (raises
+`GoldenMismatch`) instead of guessing when the two are not comparable or either is clipped.
+
+The voltage tolerance defaults to automatic: `margin` (default 2) times the largest distance by which any
+taught capture left the reference's envelope, but never less than one display step (the scope's 8-bit
+screen resolution, `256 * yincrement` for 16-bit data). The time tolerance (`t_tol`, default 2 samples)
+widens the mask around edges, without wrapping around the ends of the record.
+
+Measured on the real scope (square wave 3 Vpp, 1 kHz, `captures/clock.yaml`, 1000 points): 21 captures had
+a point-by-point deviation from the mean of at most 58 mV (rms 25 mV); one display step is 34 mV. A mask of
++-100 mV and +-2 samples gave 0 false failures in 11 good captures and caught: amplitude -5 %, offset
++80 mV, frequency +0.5 %, a single 50 us glitch, duty cycle 50 -> 55 %. Without a time tolerance, one sample
+of edge jitter is an error of the full swing. A clipped capture (raw samples at 0 or the top code) looks
+plausible and is refused.
+
+A golden file is only valid for the capture conditions it was taught under (same `captures/*.yaml`, same
+channel/scale/timebase), with a working trigger and no clipping in any taught capture; retaught whenever
+the capture file or the unit-under-test's expected signal changes. See `examples/README.md` for
+`golden_demo.py` (`teach` / `run`).
+
 ## Memory and frame recording (measured 2026-09-27, one channel on)
 
 Memory depth: 1k, 10k, 100k, 1M, 10M, 25M points; 25M is the maximum (`50M` is clamped to 25M).
@@ -331,7 +356,8 @@ over USB with a fresh preamble on every read. Times are for one waveform of chan
 ## Files
 
 `rigol_dho_plug.py` the plug · `fake_resource.py` hardware-free stand-in · `capture.py` typed model + YAML
-front end for capture conditions · `capture.schema.json` its generated JSON Schema · `captures/` capture
-files · `tests/` (including `tests/data/broken.yaml`) · `bench_usb.py` · `example_test.py` · `udev/` ·
-`tools/bare_socket_check.py` · `.vscode/settings.json` YAML schema mapping for VS Code ·
+front end for capture conditions · `capture.schema.json` its generated JSON Schema · `golden.py` compare a
+capture with a golden reference (mask) · `captures/` capture files · `tests/` (including
+`tests/data/broken.yaml`) · `bench_usb.py` · `example_test.py` · `udev/` · `tools/bare_socket_check.py` ·
+`.vscode/settings.json` YAML schema mapping for VS Code ·
 `SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md` the original specs (superseded where this README differs).

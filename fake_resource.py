@@ -69,16 +69,36 @@ def _format_default(value) -> str:
     return '1' if s == 'ON' else '0' if s == 'OFF' else s
 
 
+# Golden-comparison test signal (opt-in, `signal='clock'`): a bounded square wave that stays
+# well inside the code range, unlike the default sawtooth below (which deliberately touches 0 and
+# the top code and would always look clipped). One period spans the whole default 1000-point
+# screen capture (xincrement 1 us => 1 kHz), 50% duty cycle.
+_CLOCK_PERIOD = 1000
+_CLOCK_DUTY = 500
+_CLOCK_LOW = {'BYTE': 64, 'WORD': 16384}
+_CLOCK_HIGH = {'BYTE': 191, 'WORD': 49151}
+_MID_CODE = {'BYTE': 128, 'WORD': 32768}
+_MAX_CODE = {'BYTE': 255, 'WORD': 65535}
+_DEFECTS = (None, 'shift', 'gain', 'glitch')
+_SIGNALS = (None, 'clock')
+
+
 class FakeDhoResource:
     """Emulate the subset of PyVISA message-based interface needed by RigolDhoPlug."""
 
     def __init__(self, status: str = 'RUN', memory_depth: int = 10000,
-                 reject: dict[str, str] | None = None):
+                 reject: dict[str, str] | None = None, defect: str | None = None,
+                 signal: str | None = None):
         self.timeout = 10000
         self.chunk_size = 1024 * 1024
         self.read_termination = '\n'
         self.write_termination = '\n'
         self.log: list[str] = []
+
+        if defect not in _DEFECTS:
+            raise ValueError(f'defect must be one of {_DEFECTS}, got {defect!r}')
+        if signal not in _SIGNALS:
+            raise ValueError(f'signal must be one of {_SIGNALS}, got {signal!r}')
 
         # Configurable state
         self._status = status  # RUN / STOP / WAIT
@@ -90,11 +110,37 @@ class FakeDhoResource:
         self._wav_stop = 1
         self._sing_wait_count = 0  # tracks how many :TRIG:STAT? after SING
         self.closed = False
+        self._defect = defect  # None (unchanged) / 'shift' / 'gain' / 'glitch'; see _waveform_samples
+        self._signal = signal  # None (default sawtooth, unchanged) / 'clock' (bounded, for golden.py)
 
         # Generic settings store, error queue and injected rejections
         self._settings: dict[str, str] = {}
         self._error_queue: list[str] = []
         self._reject = reject or {}
+
+    def _waveform_samples(self, idx: np.ndarray, fmt: str) -> np.ndarray:
+        """Sample codes for absolute sample indices `idx` (0-based), fmt 'BYTE' or 'WORD'.
+
+        With `defect=None` and `signal=None` this reproduces exactly the previous hard-coded
+        sawtooth (i % 256 / (i * 257) % 65536), so existing behaviour and tests are unchanged.
+        """
+        shifted = idx - 5 if self._defect == 'shift' else idx
+        if self._signal == 'clock':
+            phase = np.mod(shifted, _CLOCK_PERIOD)
+            base = np.where(phase < _CLOCK_DUTY, _CLOCK_HIGH[fmt], _CLOCK_LOW[fmt]).astype(np.float64)
+        elif fmt == 'BYTE':
+            base = np.mod(shifted, 256).astype(np.float64)
+        else:
+            base = np.mod(shifted.astype(np.int64) * 257, 65536).astype(np.float64)
+
+        if self._defect == 'gain':
+            mid = _MID_CODE[fmt]
+            base = mid + 0.9 * (base - mid)
+        if self._defect == 'glitch':
+            base = np.where((idx >= 500) & (idx <= 504), _MID_CODE[fmt], base)
+
+        codes = np.clip(np.round(base), 0, _MAX_CODE[fmt])
+        return codes.astype(np.uint8 if fmt == 'BYTE' else np.uint16)
 
     # ── write / query ─────────────────────────────────────────
 
@@ -233,10 +279,8 @@ class FakeDhoResource:
         start = self._wav_star - 1  # convert to 0-based
         stop = self._wav_stop - 1   # convert to 0-based
 
-        if fmt == 'BYTE':
-            data = np.array([i % 256 for i in range(start, stop + 1)], dtype=np.uint8)
-        else:
-            data = np.array([(i * 257) % 65536 for i in range(start, stop + 1)], dtype=np.uint16)
+        idx = np.arange(start, stop + 1)
+        data = self._waveform_samples(idx, fmt)
 
         return container(data)
 
