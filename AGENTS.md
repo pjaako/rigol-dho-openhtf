@@ -3,7 +3,7 @@
 OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 
 - Python env: `.venv/` (openhtf 1.6.1, pyvisa 1.16.2, pyvisa-py 0.8.1, pyusb, numpy, pytest). `pytest` and `python` on PATH come from it. Do not install packages.
-- The real scope is only for the human/manager to touch. Agents use `fake_resource.FakeDhoResource`.
+- Coder agents never touch the real scope; they use `fake_resource.FakeDhoResource`. The project-owner agent may use it remotely, also with nobody on site, as long as the state is saved first and every change can be undone over the same connection. Never change the scope's LAN settings over LAN.
 - This directory is on NTFS: `chmod` does nothing. Do not rely on file modes.
 - Do not reinvent transports: PyVISA handles USBTMC and IEEE-488.2 binary blocks.
 - `SPEC.md` is the original contract; where it disagrees with `README.md` ("Things the manual does not tell you"), README wins: it records what the real scope does.
@@ -19,3 +19,5 @@ OpenHTF plug for Rigol DHO800/DHO900 scopes. Read `SPEC.md`; it is the contract.
 - Run `mypy --strict capture.py` with a checker from outside the project venv; it must stay clean.
 - Machine comparison uses `golden.py` (mask around a taught reference). A golden file is valid only for the capture file, probe and scope it was taught with; `compare` refuses anything else. Do not loosen those checks to make a test pass.
 - To exercise a running OpenHTF station without a browser use `tools/operator_robot.py <answer> [<answer> ...]`.
+- OpenHTF's operator prompt shows one image (`image_url`), a text field and one button. Two images need one composite picture; two buttons do not exist in stock OpenHTF 1.6.1.
+- Screen capture: `:DISP:DATA? PNG` returns the scope screen as an IEEE-488.2 block (about 120 KB, 1024x600), measured over the raw socket on 2026-09-27. There is no plug method for it yet.
