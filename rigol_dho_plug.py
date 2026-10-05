@@ -86,16 +86,17 @@ class RigolDhoPlug(BasePlug):
     auto_placeholder = True
 
     def __init__(self, resource=None, restore_state=None):
-        self._rm = None
         if resource is not None:
             self._resource = resource
         else:
             import pyvisa
-            self._rm = pyvisa.ResourceManager('@py')
+            # PyVISA hands out one ResourceManager per backend to the whole process: never close it,
+            # that would close the sessions of every other instrument plug in the same test.
+            rm = pyvisa.ResourceManager('@py')
             if CONF.rigol_dho_resource:
                 resource_name = CONF.rigol_dho_resource
             else:
-                found = self._rm.list_resources('USB?*::INSTR')
+                found = rm.list_resources('USB?*::INSTR')
                 resource_name = None
                 for name in found:
                     parts = name.split('::')
@@ -107,13 +108,11 @@ class RigolDhoPlug(BasePlug):
                         except ValueError:
                             pass
                 if resource_name is None:
-                    self._rm.close()
-                    self._rm = None
                     raise RuntimeError(
                         'No Rigol DHO scope found on USB. '
                         'Set --rigol_dho_resource or connect a scope.'
                     )
-            self._resource = self._rm.open_resource(resource_name)
+            self._resource = rm.open_resource(resource_name)
         self._resource.timeout = 10000
         self._resource.chunk_size = 1024 * 1024
         self._resource.read_termination = '\n'
@@ -416,6 +415,3 @@ class RigolDhoPlug(BasePlug):
             except Exception as exc:  # noqa: BLE001 - must not block closing the resource
                 self.logger.warning('Failed to restore scope state: %s', exc)
         self._resource.close()
-        if self._rm is not None:
-            self._rm.close()
-            self._rm = None

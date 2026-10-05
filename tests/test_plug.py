@@ -224,15 +224,19 @@ def test_discovery_matches_decimal_and_hex_vendor(monkeypatch, name):
     monkeypatch.setattr(pyvisa, 'ResourceManager', lambda backend: rm)
     plug = RigolDhoPlug()
     assert rm.opened == name
+    resource = plug._resource
     plug.tearDown()
-    assert rm.closed
+    # PyVISA shares one ResourceManager per backend: closing it would close other plugs' sessions
+    assert resource.closed and not rm.closed
 
 
 def test_discovery_no_scope(monkeypatch):
     import pyvisa
-    monkeypatch.setattr(pyvisa, 'ResourceManager', lambda backend: _StubRM(['USB0::1234::1::X::0::INSTR']))
+    rm = _StubRM(['USB0::1234::1::X::0::INSTR'])
+    monkeypatch.setattr(pyvisa, 'ResourceManager', lambda backend: rm)
     with pytest.raises(RuntimeError):
         RigolDhoPlug()
+    assert not rm.closed  # shared by the process, see above
 
 
 def test_raw_default_is_one_window_of_memory_depth():

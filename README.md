@@ -151,6 +151,10 @@ for all, if scale, offset and timebase did not change).
 - `:MEAS:ITEM?` returns `9.9E+37` on the first query of an item and when the trace is clipped.
 - pyvisa-py names the device `USB0::6833::1101::<serial>::0::INSTR` (decimal vendor id).
 - Re-sending `:WAV:SOUR/MODE/FORM` costs ~80 ms per waveform; the plug caches the last setup.
+- PyVISA hands out one `ResourceManager` per backend to the whole process. Closing it closes every session
+  opened through it, so `tearDown()` closes only the plug's own resource. Measured 2026-10-05 with the scope
+  on USB and a second session on the same manager: with the manager closed in `tearDown()` the second
+  session answered `InvalidSession`; with only the resource closed it kept answering.
 - **Screen capture** (measured 2026-09-28 over LAN, bare socket and PyVISA): `:DISP:DATA? PNG` answers with a
   `#9` block holding a complete PNG, 1024 x 600, 8-bit RGBA, 73 to 116 KB, in 214 to 304 ms. It changes no
   setting and queues no error. While stopped, consecutive screenshots are byte-identical and the waveform
