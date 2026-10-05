@@ -170,6 +170,10 @@ for all, if scale, offset and timebase did not change).
   2026-09-28). `get_state()` reads them and `:WAV:SOUR`, `set_state()` writes them back after the block, mode
   first, and checks the read-back. `:WAV:SOUR CHAN2` was not accepted while channel 2 was off, so whether the
   block carries the source is not known.
+- Do not verify a restore by comparing setup blocks. Measured 2026-10-05 over USB: after `*RST`, a capture
+  setup and `set_state()`, the block read by `:SYST:SET?` had the same length as the saved one (2803 bytes)
+  but was not byte-identical, while timebase, channel scale and offset, trigger sweep, recording and the
+  `:WAV` settings read back as before and no error was queued. Which bytes differ and why is not known.
 - Order matters in a restore. With the `:WAV` settings written after the recording switch, recording was
   found off again in 2 of 4 restores; written before it, in 0 of 9. In steady state (no block loaded just
   before) no `:WAV` command switched recording off in 10 tries, so the cause is the timing after a block
