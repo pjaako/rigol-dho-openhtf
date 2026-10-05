@@ -37,7 +37,7 @@ def phase(test, scope):
 | `write_checked(cmd)` | `write()` then `check_errors()`, raises on any error |
 | `reset()` | `*RST`, waits, drains errors; never sends `*OPC?` (always `0` on this firmware) |
 | `wait_stopped(timeout_s=10.0)` | polls `trigger_status()` until `STOP` |
-| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag and the `:WAV` read settings |
+| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag, the `:WAV` read settings and eight settings read back to check that the block was loaded |
 | `screenshot(path=None)` | the scope screen as PNG bytes (`:DISP:DATA? PNG`); also written to `path` if given; `RuntimeError` if the answer is not a complete PNG |
 | `apply_setup(setup)` | writes and verifies every item; raises `RuntimeError` naming every failure |
 
@@ -59,7 +59,7 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 uv sync --all-extras --dev                                 # .venv from pyproject.toml + uv.lock, Python 3.12 or newer
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-uv run pytest -q                                           # 145 tests, no hardware needed
+uv run pytest -q                                           # 149 tests, no hardware needed
 uv run python example_test.py [--fake]
 uv run python examples/operator_demo.py [--fake]           # web GUI on port 4444, see examples/README.md
 uv run python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
@@ -170,6 +170,17 @@ for all, if scale, offset and timebase did not change).
   2026-09-28). `get_state()` reads them and `:WAV:SOUR`, `set_state()` writes them back after the block, mode
   first, and checks the read-back. `:WAV:SOUR CHAN2` was not accepted while channel 2 was off, so whether the
   block carries the source is not known.
+- **The scope can drop a setup block without telling.** Measured 2026-10-05 over USB: after a
+  `:MEAS:ITEM?` query followed by any other query (`:SYST:ERR?`, `:TRIG:STAT?`, `:CHAN1:SCAL?`), the next
+  `:SYST:SET <block>` changed nothing: timebase and scale stayed, the block read back was byte-identical to
+  the one before, the error queue was empty. It does not depend on the session (a new process saw the same)
+  and waiting 2 s does not help. A block sent directly after the measurement, or with no measurement before,
+  was loaded. Why is not known. `set_state()` therefore reads eight settings back after the block (timebase
+  scale and offset, display, scale and offset of channels 1 and 2), loads the block again up to three times
+  and raises `RuntimeError` if they still differ. On the scope: 14 restores after a measurement, 14 restored,
+  9 of them needed one extra load (0.15 s), none needed two; recording on and the `:WAV` settings still
+  held 5 s later. A dropped load is all or nothing, so one changed setting among the eight reveals it; a test
+  that changes none of them is not covered.
 - Do not verify a restore by comparing setup blocks. Measured 2026-10-05 over USB: after `*RST`, a capture
   setup and `set_state()`, the block read by `:SYST:SET?` had the same length as the saved one (2803 bytes)
   but was not byte-identical, while timebase, channel scale and offset, trigger sweep, recording and the

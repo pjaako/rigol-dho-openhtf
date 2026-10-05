@@ -139,6 +139,10 @@ class FakeDhoResource:
         self._settings: dict[str, str] = {}
         self._error_queue: list[str] = []
         self._reject = reject or {}
+        # Measured on the scope 2026-10-05: after a :MEAS:ITEM? query followed by any other query
+        # the next setup block is dropped without an error; a repeated load takes.
+        self._measured = False
+        self._drop_block = False
 
     def _waveform_samples(self, idx: np.ndarray, fmt: str) -> np.ndarray:
         """Sample codes for absolute sample indices `idx` (0-based), fmt 'BYTE' or 'WORD'.
@@ -229,6 +233,10 @@ class FakeDhoResource:
     def query(self, cmd: str) -> str:
         self.log.append(cmd)
         cmd = cmd.strip()
+        if cmd.startswith(':MEAS:ITEM?'):
+            self._measured = True
+        elif self._measured:
+            self._drop_block = True
 
         if cmd == '*IDN?':
             return 'RIGOL TECHNOLOGIES,DHO814,FAKE0000000001,00.01.02'
@@ -319,6 +327,9 @@ class FakeDhoResource:
         self.log.append(message)
         if message.strip() != ':SYST:SET':
             raise ValueError(f'Unexpected binary write: {message}')
+        dropped, self._measured, self._drop_block = self._drop_block, False, False
+        if dropped:
+            return
         blob = pickle.loads(bytes(values))
         self._settings = dict(blob['settings'])
         self._memory_depth = blob['memory_depth']

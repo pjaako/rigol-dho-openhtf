@@ -550,6 +550,45 @@ def test_set_state_raises_when_a_waveform_setting_does_not_stick():
         p.set_state(state)
 
 
+def test_set_state_loads_the_block_again_when_the_scope_dropped_it_after_a_measurement():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    p.apply_setup({':TIM:MAIN:SCAL': 2e-4, ':CHAN1:SCAL': 0.5})
+    p.measure('VPP', 1)                    # a measurement and then any query: the fake drops one block
+    p.set_state(state)
+    assert p.query(':TIM:MAIN:SCAL?') == state['check'][':TIM:MAIN:SCAL']
+    assert p.query(':CHAN1:SCAL?') == state['check'][':CHAN1:SCAL']
+    assert fr.log.count(':SYST:SET ') == 2
+
+
+def test_set_state_raises_when_the_block_never_takes():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    p.apply_setup({':TIM:MAIN:SCAL': 2e-4})
+    fr.write_binary_values = lambda message, values, datatype='B': fr.log.append(message)
+    with pytest.raises(RuntimeError, match=':TIM:MAIN:SCAL'):
+        p.set_state(state)
+    assert fr.log.count(':SYST:SET ') == 3
+
+
+def test_teardown_restores_after_a_measurement():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+    p.apply_setup({':TIM:MAIN:SCAL': 2e-4})
+    p.measure('VPP', 1)
+    p.tearDown()
+    assert float(fr.query(':TIM:MAIN:SCAL?')) == pytest.approx(2e-6)
+
+
+def test_set_state_accepts_a_state_saved_without_check_values():
+    p = _plug()
+    state = p.get_state()
+    del state['check']
+    p.set_state(state)                     # must not raise
+
+
 def test_set_state_accepts_a_state_saved_without_waveform_settings():
     p = _plug()
     state = p.get_state()

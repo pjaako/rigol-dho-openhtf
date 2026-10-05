@@ -81,6 +81,11 @@ class RigolDhoPlug(BasePlug):
     _RECORDING_RESTORE_DELAY_S = 1.2
     # Not carried by the setup block (measured). MODE comes before STAR/STOP: it decides their range.
     _WAV_HEADERS = (':WAV:SOUR', ':WAV:MODE', ':WAV:FORM', ':WAV:STAR', ':WAV:STOP')
+    # Read back after a setup block to see whether the scope loaded it. A dropped block changes
+    # nothing at all (measured), so a few settings that tests usually change are enough.
+    _CHECK_HEADERS = (':TIM:MAIN:SCAL', ':TIM:MAIN:OFFS', ':CHAN1:DISP', ':CHAN1:SCAL', ':CHAN1:OFFS',
+                      ':CHAN2:DISP', ':CHAN2:SCAL', ':CHAN2:OFFS')
+    _BLOCK_LOAD_ATTEMPTS = 3
     """OpenHTF plug wrapping a Rigol DHO scope via PyVISA."""
 
     auto_placeholder = True
@@ -337,13 +342,27 @@ class RigolDhoPlug(BasePlug):
         )
         recording = self.query(':REC:WREC:ENAB?') == '1'
         wav = {header: self.query(f'{header}?') for header in self._WAV_HEADERS}
-        return {'block': block, 'recording': recording, 'wav': wav}
+        check = {header: self.query(f'{header}?') for header in self._CHECK_HEADERS}
+        return {'block': block, 'recording': recording, 'wav': wav, 'check': check}
 
     def set_state(self, state: dict) -> None:
         self.check_errors()   # stale errors must not be blamed on the restore
-        self._resource.write_binary_values(
-            ':SYST:SET ', state['block'], datatype='B'
-        )
+        # Measured: after a :MEAS:ITEM? query followed by any other query the scope drops the block
+        # without an error; a repeated load takes, mostly the first one.
+        check = state.get('check', {})
+        for attempt in range(1, self._BLOCK_LOAD_ATTEMPTS + 1):
+            self._resource.write_binary_values(
+                ':SYST:SET ', state['block'], datatype='B'
+            )
+            not_loaded = [h for h, value in check.items() if self.query(f'{h}?') != value]
+            if not not_loaded:
+                break
+            self.logger.warning('set_state: setup block not loaded (attempt %d): %s', attempt, not_loaded)
+        else:
+            raise RuntimeError(
+                f'set_state: the scope did not load the setup block in {self._BLOCK_LOAD_ATTEMPTS} '
+                f'attempts, still different: {not_loaded}'
+            )
         self._wav_setup = None
         # The block does not carry the waveform read settings. They go before the recording
         # switch: written after it, recording was found off again in 2 of 4 restores.
