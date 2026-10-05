@@ -1,0 +1,84 @@
+# HANDOFF: rigol-dho-openhtf
+
+Updated 2026-10-05, after the packaging and the restore fix. This file is in git and public since 2026-10-05: no real addresses, serial numbers or private paths in it. Read `AGENTS.md` and `README.md` first; this file is only the moving part.
+The way of working (project owner, coders, acceptance on hardware) is in the `hortator` skill
+(`../hortator/skills/hortator/SKILL.md`).
+
+## State
+
+- `main` = `origin/main` = `829ff0d` (2026-10-05). No other branches. 149 tests,
+  `mypy --strict --follow-imports=silent src/rigol_dho_openhtf/capture.py` clean (run with `uvx mypy`).
+- The code is the package `src/rigol_dho_openhtf/` (`plug.py`, `capture.py`, `golden.py`,
+  `fake_resource.py`), set up with `uv sync --all-extras --dev`. `python capture.py ...` became the command
+  `rigol-dho-capture schema|check`. `plug.py` is not strict-clean under mypy (21 errors on 2026-10-05; only `capture.py` is required to be).
+- Done 2026-10-05:
+  - screenshot work and `:WAV` restore merged from `hortator-test` (accepted over LAN on 2026-09-28);
+  - packaging; the next two were accepted on the DHO814 over USB:
+  - `tearDown()` no longer closes PyVISA's shared ResourceManager (it killed other plugs' sessions);
+  - `set_state()` checks that the setup block was loaded, reloads up to three times and raises. The scope
+    drops a block after a `:MEAS:ITEM?` query followed by another query; the cause is not found.
+- Known limit of that check: it reads back eight settings (timebase, channels 1 and 2). A test that changes
+  none of them and measures can still leave the scope unrestored without notice.
+- Every commit is public: scan for real addresses, the serial number and home paths before a push.
+
+## The sibling project
+
+- `../siglent-sdg-openhtf` (SDG2042X generator plug, its own owner agent) uses this package as a
+  dependency, pinned to a commit. Its next task is a station demo: generator generates, scope measures.
+- The two owner agents write each other untracked notes: `NOTE-*.md` in the other project's working tree,
+  deleted by the reader, never committed. My last one is `../siglent-sdg-openhtf/NOTE-from-rigol-dho.md`
+  (2026-10-05): pin `829ff0d`, what the restore check does and its limit.
+- Asked for by that agent and not built (new features, not decided by the user): a helper that writes a
+  whole `get_state()` result to a file, and a `measure()` that hides the first `9.9E+37`.
+
+## Shared resources right now
+
+- Scope: DHO814, firmware 00.01.05, on USB (`lsusb` shows `1ab1:044d`). On 2026-10-05 its LAN port
+  (port 5555, static address set by us; the real address is not written here, ask the user) did not accept a connection from this PC; not investigated.
+- PC side: NetworkManager profile `rigol-direct`, a static address in the scope's /24 on the wired interface, no default route.
+- Scope as left 2026-10-05 about 05:50, read 5 s after the last restore: 2 us/div, 50 mV/div and 0 V
+  offset on CH1, sweep AUTO, recording off, `:WAV` `CHAN1`, `NORM`, `WORD`, 1..1000, no errors. This is not
+  the user's setup of 2026-09-27 (500 us/div, recording on); that one is in
+  `setups/user_setup_2026-09-27.bin`. Blocks saved on 2026-10-05: `setups/user_setup_2026-10-05_packaging.bin`
+  (block only) and `setups/user_state_2026-10-05_restore.bin` (pickled `get_state()` without `check`).
+- CH1 is cabled to the generator's CH1 (BNC, no probe, no terminator); the generator's outputs were off.
+  The generator belongs to the sibling project: the user offered access on 2026-10-05, I did not need it.
+  Ask before using it.
+- No model server is running. Ports 4444 (demo) and 8080 (llama-server) are free.
+
+## Open items, in order
+
+1. **Published** 2026-09-28: https://github.com/pjaako/rigol-dho-openhtf (public, branch `main`, MIT,
+   31 commits by `pjaako` with Claude as co-author). Before the push the history was rewritten: serial
+   number replaced by `DHO8A000000000`, scope address by `192.0.2.10`, PC address by `192.0.2.1`, session
+   links removed from commit messages, screenshots cropped, the binary setup dump and this file removed
+   from every commit.
+   Pushes: on 2026-10-05 the agent's shell could not push (no SSH agent, the GitHub CLI token for
+   `pjaako` was invalid); the user pushed `main` from their own terminal. After `gh auth login` this works:
+   `git -c credential.helper='!gh auth git-credential' push https://github.com/pjaako/rigol-dho-openhtf.git main:main`.
+   **`setups/*.bin` and real addresses must stay out of git; this file is committed and must not contain them.** Text in the
+   repository uses placeholder addresses; the tools read the real one from `SCOPE_HOST`
+   (set `SCOPE_HOST` to the scope's real address, which is not written here).
+2. **Editor check** by the user: open `captures/clock.yaml` in PyCharm, change `coupling: DC` to `DCC`, see
+   whether it is underlined. Colleagues use VS Code. Nobody has verified either editor.
+3. **Signal generator in sweep mode** (connected since 2026-10-05, see above): decode UltraAcquire segments (why 20 480
+   samples per segment, relation to `MAXF`, timestamps), measure the single-capture loop rate, and test the
+   golden mask against real signal defects. So far only computed defects and changed capture conditions
+   were tested.
+4. `trigger.type` was dropped from the capture file format; it comes back when a second trigger type is needed.
+5. Deep-memory attachments: OpenHTF keeps attachments in memory and base64 in JSON. 25 M points need an
+   output callback that writes the waveform to its own file.
+6. Two buttons PASS / FAIL in the web GUI: stock OpenHTF has none (the user remembered them from
+   spintop-openhtf). Parked by the user.
+
+## Do not
+
+- Do not verify a restore by comparing setup blocks: a loaded block reads back with a few bytes changed.
+- Do not send `:MEAS:CLE ALL` or `:MEAS:CLE ITEM1`: this firmware answers `-108`.
+
+- Do not read deep memory (RAW) while waveform recording is enabled: it returns a capture that is none of
+  the recorded frames. The plug refuses; do not bypass it.
+- Do not use `*OPC?` to wait: it always answers 0 on this firmware.
+- Do not conclude anything from clipped samples.
+- Do not change the PC's network or udev configuration yourself; prepare the command for the user.
+- Do not start local models when the user says the machine must stay quiet.

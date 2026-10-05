@@ -7,6 +7,5 @@ opencode.jsonl
 opencode.err
 .serena/
 bench_results/*.npy
-HANDOFF.md
 setups/*.bin
 examples/results/
