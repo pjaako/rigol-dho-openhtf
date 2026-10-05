@@ -15,7 +15,7 @@ from typing import Callable
 
 import numpy as np
 
-from rigol_dho_plug import Waveform
+from rigol_dho_openhtf.plug import Waveform
 
 
 class GoldenMismatch(ValueError):

@@ -9,13 +9,9 @@ Then open http://<this machine>:4444 in a browser, enter a DUT id, look at the w
 import argparse
 import base64
 import io
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # for `import common`; 'examples' collides
-# with a package of the same name in site-packages, so this can't be `from examples.common import ...`
 
 import matplotlib
 matplotlib.use('Agg')
@@ -28,8 +24,9 @@ from openhtf.output.servers import station_server
 from openhtf.plugs import user_input
 from openhtf.util import configuration, units
 
-from common import frequency_hz, waveform_npz_bytes
-from rigol_dho_plug import RigolDhoPlug
+from common import frequency_hz, waveform_npz_bytes  # next to this script; 'examples' collides with a
+# package of the same name in site-packages, so this can't be `from examples.common import ...`
+from rigol_dho_openhtf import RigolDhoPlug
 
 CAPTURE = ROOT / 'captures' / 'clock.yaml'
 RESULTS = Path(__file__).resolve().parent / 'results'
@@ -38,7 +35,7 @@ ANSWERS = {'P': 'PASS', 'PASS': 'PASS', 'F': 'FAIL', 'FAIL': 'FAIL'}
 
 class FakePlug(RigolDhoPlug):
     def __init__(self):
-        from fake_resource import FakeDhoResource
+        from rigol_dho_openhtf.fake_resource import FakeDhoResource
         super().__init__(resource=FakeDhoResource())
 
 

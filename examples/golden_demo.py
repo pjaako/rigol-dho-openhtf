@@ -16,8 +16,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # for `import common`; see operator_demo.py
 
 import numpy as np
 import openhtf as htf
@@ -26,11 +24,11 @@ from openhtf.output.servers import station_server
 from openhtf.plugs import user_input
 from openhtf.util import configuration, units
 
-from capture import load_capture
+from rigol_dho_openhtf.capture import load_capture
 from common import frequency_hz, waveform_npz_bytes
-from fake_resource import FakeDhoResource
-from golden import Golden, compare, teach
-from rigol_dho_plug import RigolDhoPlug
+from rigol_dho_openhtf.fake_resource import FakeDhoResource
+from rigol_dho_openhtf.golden import Golden, compare, teach
+from rigol_dho_openhtf import RigolDhoPlug
 
 DEFAULT_CAPTURE = ROOT / 'captures' / 'clock.yaml'
 DEFAULT_GOLDEN = ROOT / 'golden' / 'clock.npz'

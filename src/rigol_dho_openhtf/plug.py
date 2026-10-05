@@ -11,7 +11,7 @@ import numpy as np
 from openhtf.plugs import BasePlug
 from openhtf.util import configuration
 
-from capture import Capture, load_capture
+from rigol_dho_openhtf.capture import Capture, load_capture
 
 if TYPE_CHECKING:
     import pyvisa

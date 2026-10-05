@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from fake_resource import FakeDhoResource
-from rigol_dho_plug import RigolDhoPlug, Waveform
+from rigol_dho_openhtf.fake_resource import FakeDhoResource
+from rigol_dho_openhtf import RigolDhoPlug, Waveform
 
 
 # ── helpers ──────────────────────────────────────────────────

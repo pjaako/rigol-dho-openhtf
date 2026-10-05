@@ -5,7 +5,7 @@ Developed and measured on a DHO814, firmware 00.01.05, Debian 13.
 
 ```python
 import openhtf as htf
-from rigol_dho_plug import RigolDhoPlug
+from rigol_dho_openhtf import RigolDhoPlug
 
 @htf.measures(htf.Measurement('vpp'))
 @htf.plug(scope=RigolDhoPlug)
@@ -56,14 +56,19 @@ Facts this is built on, measured on the real scope (DHO814, firmware 00.01.05):
 ## Setup
 
 ```bash
-uv venv .venv && uv pip install --python .venv/bin/python openhtf pyvisa pyvisa-py pyusb numpy pytest pyyaml jsonschema matplotlib
+uv sync --all-extras --dev                                 # .venv from pyproject.toml + uv.lock, Python 3.12 or newer
 sudo cp udev/99-rigol-dho.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules \
   && sudo udevadm trigger --attr-match=idVendor=1ab1      # user must be in group plugdev
-.venv/bin/python -m pytest -q                              # 145 tests, no hardware needed
-.venv/bin/python example_test.py [--fake]
-.venv/bin/python examples/operator_demo.py [--fake]        # web GUI on port 4444, see examples/README.md
-.venv/bin/python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
+uv run pytest -q                                           # 145 tests, no hardware needed
+uv run python example_test.py [--fake]
+uv run python examples/operator_demo.py [--fake]           # web GUI on port 4444, see examples/README.md
+uv run python bench_usb.py [--fake] --depths 10k,1M,10M,25M --chunks all
 ```
+
+The code is one package, `rigol_dho_openhtf` (in `src/`): `from rigol_dho_openhtf import RigolDhoPlug`, and
+for tests without hardware `from rigol_dho_openhtf.fake_resource import FakeDhoResource`, passed as
+`RigolDhoPlug(resource=FakeDhoResource())`. `matplotlib` is needed only for the picture of a golden file
+(extra `plot`).
 
 The resource is auto-discovered (first USB instrument with vendor 0x1AB1); override with the OpenHTF
 config key `rigol_dho_resource`, e.g. `TCPIP::192.168.1.50::INSTR`.
@@ -212,7 +217,7 @@ trigger:
 memory: 1M
 ```
 
-`capture.py` is the typed model (`Capture`, `Channel`, `Edge`) and the YAML front end for it. Quantities are
+`rigol_dho_openhtf.capture` is the typed model (`Capture`, `Channel`, `Edge`) and the YAML front end for it. Quantities are
 strings `<number> <prefix><unit>`, prefixes `m u µ n k`, units `V`/`s`, `/div` where the field is per division.
 
 | Field | Unit | Choices |
@@ -233,11 +238,11 @@ Mistakes are caught in four places:
 | Stage | Who | Catches |
 |---|---|---|
 | While typing | editor with `capture.schema.json` | unknown keys, wrong choices, wrong unit or missing `/div` |
-| Before commit / in CI | `python capture.py check captures/*.yaml` | the same, for people without such an editor |
+| Before commit / in CI | `rigol-dho-capture check captures/*.yaml` | the same, for people without such an editor |
 | When the test starts | `load_capture()` | everything above plus cross-checks, all problems at once, with `<file>:<line>:` and hints |
 | On the scope | `apply_setup()` (inside `apply_capture()`) | values the scope clamps or rejects |
 
-`tests/data/broken.yaml` holds nine deliberate mistakes; the loader and the schema (`python capture.py
+`tests/data/broken.yaml` holds nine deliberate mistakes; the loader and the schema (`rigol-dho-capture
 schema`, also committed as `capture.schema.json`) each report all nine.
 
 Editor setup: VS Code (Red Hat YAML extension) picks up `.vscode/settings.json`
@@ -248,14 +253,14 @@ version 2020-12, file path pattern `captures/*.yaml`.
 The Python spelling still works directly, without YAML:
 
 ```python
-from capture import Capture, Channel, Edge, V, ms, div
+from rigol_dho_openhtf.capture import Capture, Channel, Edge, V, ms, div
 Capture(timebase=1 * ms / div, ch1=Channel(scale=1 * V / div, offset=-1.5 * V),
         trigger=Edge(source='ch1', level=1.5 * V))
 ```
 
 ## Comparing with a golden waveform
 
-`golden.py` decides PASS/FAIL by comparing a capture with a reference taught from known-good captures,
+`rigol_dho_openhtf.golden` decides PASS/FAIL by comparing a capture with a reference taught from known-good captures,
 instead of asking an operator: a mask around the reference, widened by a voltage tolerance and a time
 tolerance. `golden.teach(waveforms)` builds a `Golden` (reference + mask) from at least three good
 captures; `golden.compare(waveform, golden)` checks a new capture against it and refuses (raises
@@ -375,9 +380,10 @@ over USB with a fresh preamble on every read. Times are for one waveform of chan
 
 ## Files
 
-`rigol_dho_plug.py` the plug · `fake_resource.py` hardware-free stand-in · `capture.py` typed model + YAML
-front end for capture conditions · `capture.schema.json` its generated JSON Schema · `golden.py` compare a
-capture with a golden reference (mask) · `captures/` capture files · `tests/` (including
+`src/rigol_dho_openhtf/`: `plug.py` the plug · `fake_resource.py` hardware-free stand-in · `capture.py`
+typed model + YAML front end for capture conditions (command `rigol-dho-capture`) · `golden.py` compare a
+capture with a golden reference (mask). `pyproject.toml`, `uv.lock` · `capture.schema.json` the generated
+JSON Schema of capture files · `captures/` capture files · `tests/` (including
 `tests/data/broken.yaml`) · `bench_usb.py` · `example_test.py` · `udev/` · `tools/bare_socket_check.py` ·
 `.vscode/settings.json` YAML schema mapping for VS Code ·
 `SPEC.md`/`SPEC-setup.md`/`SPEC-capture.md`/`SPEC-golden.md`/`SPEC-screenshot.md` the original specs (superseded where this README differs).

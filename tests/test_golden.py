@@ -11,10 +11,10 @@ import numpy as np
 import openhtf as htf
 import pytest
 
-from capture import load_capture
-from fake_resource import FakeDhoResource
-from golden import Golden, GoldenMismatch, compare, teach
-from rigol_dho_plug import RigolDhoPlug, Waveform
+from rigol_dho_openhtf.capture import load_capture
+from rigol_dho_openhtf.fake_resource import FakeDhoResource
+from rigol_dho_openhtf.golden import Golden, GoldenMismatch, compare, teach
+from rigol_dho_openhtf import RigolDhoPlug, Waveform
 
 ROOT = Path(__file__).resolve().parent.parent
 CLOCK_YAML = ROOT / 'captures' / 'clock.yaml'
@@ -302,8 +302,7 @@ def test_fake_resource_rejects_unknown_defect_or_signal():
 
 # ── 11. demo phases on the fake ──────────────────────────────────────────
 
-sys.path.insert(0, str(ROOT / 'examples'))
-import golden_demo  # noqa: E402  (path must be set up first)
+import golden_demo  # noqa: E402  (examples/ is on pytest's pythonpath, see pyproject.toml)
 
 
 def test_demo_teach_then_run_on_the_fake(tmp_path):

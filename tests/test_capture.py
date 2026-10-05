@@ -11,11 +11,11 @@ import jsonschema
 import pytest
 import yaml
 
-from capture import (
+from rigol_dho_openhtf.capture import (
     Capture, CaptureError, Channel, Edge, V, capture_schema, div, load_capture, mV, ms, parse_capture, us,
 )
-from fake_resource import FakeDhoResource
-from rigol_dho_plug import RigolDhoPlug
+from rigol_dho_openhtf.fake_resource import FakeDhoResource
+from rigol_dho_openhtf import RigolDhoPlug
 
 ROOT = Path(__file__).resolve().parent.parent
 CLOCK_YAML = ROOT / "captures" / "clock.yaml"
@@ -218,7 +218,7 @@ def test_schema_rejects_broken_yaml_with_at_least_as_many_errors():
 
 
 def test_schema_choices_match_parser_choices():
-    from capture import Channel, Edge, Capture, _block_fields, _choices
+    from rigol_dho_openhtf.capture import Channel, Edge, Capture, _block_fields, _choices
 
     schema = capture_schema()
 
@@ -280,7 +280,7 @@ def test_apply_capture_broken_file_sends_nothing_to_the_scope():
 # ── 7. command line ────────────────────────────────────────────────────
 
 def _run(*args):
-    return subprocess.run([sys.executable, 'capture.py', *args], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([str(Path(sys.executable).parent / 'rigol-dho-capture'), *args], cwd=ROOT, capture_output=True, text=True)
 
 
 def test_cli_check_clock_yaml():
@@ -303,8 +303,8 @@ def test_cli_schema_prints_valid_json():
 
 def test_memory_auto_can_be_applied():
     """The scope answers `:ACQ:MDEP AUTO` with the depth it picked; that is not a mismatch."""
-    from fake_resource import FakeDhoResource
-    from rigol_dho_plug import RigolDhoPlug
+    from rigol_dho_openhtf.fake_resource import FakeDhoResource
+    from rigol_dho_openhtf import RigolDhoPlug
     plug = RigolDhoPlug(resource=FakeDhoResource(), restore_state=False)
     plug.apply_capture(parse_capture({'timebase': '1 ms/div', 'ch1': {'scale': '1 V/div'},
                                       'trigger': {'source': 'ch1', 'level': '1.5 V'}}))
@@ -325,8 +325,8 @@ def test_quantities_are_exact_decimals(text, expected):
 
 
 def test_floats_are_sent_without_binary_noise():
-    from fake_resource import FakeDhoResource
-    from rigol_dho_plug import RigolDhoPlug
+    from rigol_dho_openhtf.fake_resource import FakeDhoResource
+    from rigol_dho_openhtf import RigolDhoPlug
     fr = FakeDhoResource()
     RigolDhoPlug(resource=fr, restore_state=False).apply_setup({':TIM:MAIN:SCAL': 200 * 1e-6})
     assert ':TIM:MAIN:SCAL 0.0002' in fr.log

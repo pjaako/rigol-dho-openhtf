@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rigol-dho-openhtf"
+version = "0.1.0"
+description = "OpenHTF plug for Rigol DHO800/DHO900 oscilloscopes over USB (USBTMC) or LAN"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Pavel Gromovikov" }]
+requires-python = ">=3.12"
+dependencies = [
+    "openhtf>=1.6.1,<2",
+    "pyvisa>=1.16",
+    "pyvisa-py>=0.8",
+    "pyusb>=1.3",
+    "numpy>=2",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.8"]  # golden.py: picture of a golden file
+
+[project.scripts]
+rigol-dho-capture = "rigol_dho_openhtf.capture:main"
+
+[project.urls]
+Repository = "https://github.com/pjaako/rigol-dho-openhtf"
+
+[dependency-groups]
+dev = ["pytest", "jsonschema", "pillow"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rigol_dho_openhtf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["examples"]  # the tests import the demo scripts

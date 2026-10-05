@@ -18,7 +18,7 @@ import statistics
 import sys
 import time
 
-from rigol_dho_plug import RigolDhoPlug
+from rigol_dho_openhtf import RigolDhoPlug
 
 
 def _parse_list(value: str, default: list) -> list:
@@ -183,7 +183,7 @@ def main():
     # Create the plug
     # restore_state=False: this script restores what it changes itself (see the finally block below).
     if args.fake:
-        from fake_resource import FakeDhoResource
+        from rigol_dho_openhtf.fake_resource import FakeDhoResource
         plug = RigolDhoPlug(resource=FakeDhoResource(), restore_state=False)
     elif args.resource:
         import pyvisa

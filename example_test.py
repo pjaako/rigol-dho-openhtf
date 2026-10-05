@@ -10,7 +10,7 @@ import sys
 import openhtf as htf
 from openhtf.util import units
 
-from rigol_dho_plug import RigolDhoPlug
+from rigol_dho_openhtf import RigolDhoPlug
 
 
 @htf.measures(
@@ -29,7 +29,7 @@ def capture_waveform(test, scope):
 
 class FakePlug(RigolDhoPlug):
     def __init__(self):
-        from fake_resource import FakeDhoResource
+        from rigol_dho_openhtf.fake_resource import FakeDhoResource
         super().__init__(resource=FakeDhoResource())
 
 

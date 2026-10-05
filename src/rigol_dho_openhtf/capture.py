@@ -8,7 +8,7 @@ The allowed keys, choices and units are defined exactly once, as the dataclass f
 hints and defaults); `parse_capture`, `capture_schema` and `to_scpi` all read that definition instead of
 repeating it. Adding an allowed value (e.g. a coupling mode) is a one-line change to the `Literal` alias.
 
-Command line: `python capture.py schema` prints the JSON Schema; `python capture.py check FILE...` loads
+Command line: `rigol-dho-capture schema` prints the JSON Schema; `rigol-dho-capture check FILE...` loads
 each file and reports `OK` or its problems.
 """
 import dataclasses
@@ -563,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"OK {path}")
         return 1 if failed else 0
-    print("usage: capture.py schema | capture.py check FILE...", file=sys.stderr)
+    print("usage: rigol-dho-capture schema | rigol-dho-capture check FILE...", file=sys.stderr)
     return 2
 
 

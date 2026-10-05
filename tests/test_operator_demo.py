@@ -5,18 +5,14 @@ from __future__ import annotations
 
 import base64
 import io
-import sys
-from pathlib import Path
 
 import numpy as np
 import openhtf as htf
 from PIL import Image
 
-from fake_resource import FakeDhoResource
+from rigol_dho_openhtf.fake_resource import FakeDhoResource
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / 'examples'))
-import operator_demo  # noqa: E402  (path must be set up first)
+import operator_demo  # examples/ is on pytest's pythonpath, see pyproject.toml
 
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 
@@ -26,7 +22,7 @@ def _screen() -> bytes:
 
 
 def _plot() -> bytes:
-    from rigol_dho_plug import RigolDhoPlug
+    from rigol_dho_openhtf import RigolDhoPlug
     w = RigolDhoPlug(resource=FakeDhoResource(), restore_state=False).read_waveform(1)
     return operator_demo.plot_png(w, 'test')
 
