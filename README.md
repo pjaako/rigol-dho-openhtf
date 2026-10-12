@@ -330,6 +330,34 @@ a point-by-point deviation from the mean of at most 58 mV (rms 25 mV); one displ
 of edge jitter is an error of the full swing. A clipped capture (raw samples at 0 or the top code) looks
 plausible and is refused.
 
+Measured again on 2026-10-12 with a signal generator (SDG2042X, square wave 1 kHz 0..3 V into the
+scope's 1 MOhm input, `captures/clock.yaml`, 10 taught captures, automatic tolerance 64 mV, `t_tol` 2):
+
+| Signal | Verdict (fails / captures) |
+|---|---|
+| good signal | 0 / 44 |
+| amplitude -1 %, -2 % | 0 / 5 each (missed) |
+| amplitude -3 %, -5 %, +5 % | 5 / 5 each (-3 %: excess 10 mV, marginal) |
+| offset +20 mV | 0 / 5 (missed) |
+| offset +40 mV, +80 mV | 5 / 5 each (+40 mV: excess 10 mV, marginal) |
+| frequency +0.05 %, +0.1 %, +0.2 % | 0 (missed: the edges drift by at most 2 samples over the half screen) |
+| frequency +0.5 % | 3 / 3 (edges 2.2 samples off at 4.5 ms) |
+| duty cycle 51 % | 0 / 5 (missed, 1 sample) |
+| duty cycle 52 %, 55 % | 5 / 5 each |
+| edges 20 us (2 samples) | 0 / 5 (missed) |
+| edges 50 us, 100 us | 3 / 3 each (29 and 137 samples outside the mask) |
+
+Two things this found in the mask itself:
+- **The record ends had no time tolerance.** The reference's last edge sat exactly on the record boundary,
+  and the envelope cannot be widened with samples that do not exist, so every capture whose final edge came
+  1 or 2 samples early failed through that single last sample with an excess of 2.95 V: frequency +0.05 %
+  looked "caught", and so did 20 us edges. `compare()` now leaves the first and last `t_tol` samples out of
+  the verdict (`Comparison.ignored_samples`); a defect that lies only there is not seen.
+- **Averaging jittering captures smears the reference's edges**, so at an edge the mask is tighter than
+  `t_tol` suggests: a 2-sample duty change (52 %) fails with 5-9 violations, although 2 samples is the
+  nominal tolerance. With `t_tol=0` the automatic tolerance became 2.8 V (the full swing, from one sample
+  of edge jitter) and missed everything: a time tolerance is not optional for a signal with edges.
+
 A golden file is only valid for the capture conditions it was taught under (same `captures/*.yaml`, same
 channel/scale/timebase), with a working trigger and no clipping in any taught capture; retaught whenever
 the capture file or the unit-under-test's expected signal changes. See `examples/README.md` for

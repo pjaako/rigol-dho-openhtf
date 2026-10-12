@@ -392,4 +392,66 @@ def test_teach_cli_runs_in_fake_mode(tmp_path):
     assert Path(str(golden_path) + '.png').exists()
 
 
+# ── 14. the record ends are not judged (SPEC-golden-ends) ───────────────────
+
+def _end_edge_captures(rng, n=10):
+    # phase 0: rising edges at samples 0, 100, ..., 1000; the last one is one past the record
+    return [_to_waveform(_base_square(phase=0.0) + rng.normal(0, SIGMA, N)) for _ in range(n)]
+
+
+def test_final_edge_two_samples_early_passes_with_t_tol_2_fails_with_t_tol_0():
+    rng = np.random.default_rng(1)
+    waveforms = _end_edge_captures(rng)
+    g2 = teach(waveforms, t_tol=2)
+    g0 = teach(waveforms, t_tol=0)
+    early = _to_waveform(_base_square(phase=2 * DT * FREQ) + rng.normal(0, SIGMA, N))
+    c = compare(early, g2)
+    assert c.passed
+    assert c.ignored_samples == 4
+    assert not c.violation_mask[:2].any() and not c.violation_mask[-2:].any()
+    c0 = compare(early, g0)
+    assert not c0.passed
+    assert c0.ignored_samples == 0
+
+
+def test_defect_inside_the_record_still_fails():
+    rng = np.random.default_rng(1)
+    g = teach(_end_edge_captures(rng), t_tol=2)
+    v = _base_square(phase=0.0) + rng.normal(0, SIGMA, N)
+    v[525] -= 1.0  # mid-pulse; index 500 sits on an edge, where the envelope spans 0..3 V
+    c = compare(_to_waveform(v), g)
+    assert not c.passed
+    assert c.first_violation_s == pytest.approx(525 * DT)
+
+
+def test_defect_in_the_ignored_ends_is_not_reported():
+    rng = np.random.default_rng(1)
+    g = teach(_end_edge_captures(rng), t_tol=2)
+    for index, expect_pass in ((0, True), (2, False)):
+        v = _base_square(phase=0.0) + rng.normal(0, SIGMA, N)
+        v[index] -= 1.0
+        assert compare(_to_waveform(v), g).passed is expect_pass, index
+
+
+def test_worst_deviation_covers_the_ignored_ends():
+    rng = np.random.default_rng(1)
+    g = teach(_end_edge_captures(rng), t_tol=2)
+    v = _base_square(phase=0.0) + rng.normal(0, SIGMA, N)
+    v[0] -= 1.0
+    v[-1] -= 1.0
+    c = compare(_to_waveform(v), g)
+    assert c.passed
+    assert c.worst_deviation > 0.9
+    assert c.worst_excess == 0.0
+
+
+def test_teach_refuses_t_tol_not_below_half_the_record():
+    n = 3
+    t = np.arange(n) * DT
+    preamble = dict(PREAMBLE, points=n)
+    waveforms = [_to_waveform(np.zeros(n), t=t, preamble=preamble) for _ in range(3)]
+    with pytest.raises(ValueError, match='smaller than half the record'):
+        teach(waveforms, t_tol=2)
+
+
 # ── 13. existing tests keep passing unmodified: verified by the full test run ──

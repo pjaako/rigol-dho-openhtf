@@ -91,10 +91,14 @@ itself. The `hortator` skill that used to describe this is not on the new machin
    (set `SCOPE_HOST` to the scope's real address, which is not written here).
 2. **Editor check** by the user: open `captures/clock.yaml` in PyCharm, change `coupling: DC` to `DCC`, see
    whether it is underlined. Colleagues use VS Code. Nobody has verified either editor.
-3. **Signal generator in sweep mode** (connected since 2026-10-05, see above): decode UltraAcquire segments (why 20 480
-   samples per segment, relation to `MAXF`, timestamps), measure the single-capture loop rate, and test the
-   golden mask against real signal defects. So far only computed defects and changed capture conditions
-   were tested.
+3. **Signal generator** (its CH1 on scope CH1, plain BNC): decode UltraAcquire segments (why 20 480 samples
+   per segment, relation to `MAXF`, timestamps) and measure the single-capture loop rate. Done 2026-10-12:
+   the golden mask against real defects (README table; SPEC-golden-ends.md fixed the record ends). The
+   generator is driven with bare SCPI over VXI-11 (`C1:BSWV`, `C1:OUTP`); set `LOAD,HZ` when nothing
+   terminates the line. The user's 50 ohm termination at the scope input did not load the signal on
+   2026-10-12 (the scope saw 2x the 50-ohm-load amplitude): check the adapter before relying on it.
+   Restore the generator with `LOAD` first, then `BSWV` (an amplitude written under `LOAD,50` doubles when
+   the load is switched to HZ afterwards).
 4. `trigger.type` was dropped from the capture file format; it comes back when a second trigger type is needed.
 5. Deep-memory attachments: OpenHTF keeps attachments in memory and base64 in JSON. 25 M points need an
    output callback that writes the waveform to its own file.

@@ -4,6 +4,10 @@
 `compare()` checks a new capture against it and reports where and how far it strayed. Both refuse
 clipped input (see README "Comparing with a golden waveform"). numpy is used throughout; matplotlib
 is only imported inside `Comparison.plot()`.
+
+The first and last `t_tol` samples are not judged: the envelope cannot be widened with samples
+beyond the record, so there the mask has the voltage tolerance only (measured 2026-10-12: a final
+edge 1-2 samples early failed with ~2.95 V excess although everything inside the record agreed).
 """
 from __future__ import annotations
 
@@ -80,6 +84,7 @@ class Comparison:
     lo: np.ndarray
     hi: np.ndarray
     violation_mask: np.ndarray         # bool, True where the sample is outside the mask
+    ignored_samples: int = 0           # samples at the two ends that were not judged (2 * t_tol)
 
     def plot(self, title: str = '') -> bytes:
         """Render a 900x420 PNG: the mask as a filled band, the reference as a thin line, the
@@ -146,12 +151,17 @@ def teach(waveforms: list[Waveform], *, v_tol: float | None = None, t_tol: int =
 
     `v_tol=None` picks the tolerance automatically: `margin` times the largest distance by which
     any taught capture leaves the reference's envelope, but never less than one display step.
+
+    `t_tol` must be smaller than half the record: `compare()` does not judge the first and last
+    `t_tol` samples, because the envelope there cannot be widened with samples that do not exist.
     """
     waveforms = list(waveforms)
     if len(waveforms) < 3:
         raise ValueError(f'teach needs at least 3 waveforms, got {len(waveforms)}')
 
     n = len(waveforms[0].t)
+    if 2 * t_tol >= n:
+        raise ValueError(f't_tol must be smaller than half the record ({t_tol} samples, {n} points)')
     t0 = waveforms[0].t
     for i, w in enumerate(waveforms):
         if len(w.t) != n:
@@ -183,7 +193,12 @@ def teach(waveforms: list[Waveform], *, v_tol: float | None = None, t_tol: int =
 
 def compare(waveform: Waveform, golden: Golden) -> Comparison:
     """Compare `waveform` against `golden`. Refuses incompatible or clipped input with
-    `GoldenMismatch` instead of returning a result."""
+    `GoldenMismatch` instead of returning a result.
+
+    The first and last `golden.t_tol` samples are not judged (`violation_mask` is False there):
+    the mask cannot be widened past the record ends, so an edge arriving a sample or two early
+    at the end failed with ~2.95 V excess although the rest of the record agreed. A defect that
+    lies only in those samples goes unnoticed. `worst_deviation` still covers all samples."""
     if len(waveform.t) != len(golden.t):
         raise GoldenMismatch(
             f'point count differs: waveform has {len(waveform.t)}, golden has {len(golden.t)}'
@@ -207,8 +222,12 @@ def compare(waveform: Waveform, golden: Golden) -> Comparison:
     above = v - golden.hi
     excess = np.maximum(below, above)
     violation_mask = excess > 0
+    ignored = min(2 * golden.t_tol, len(v))
+    if golden.t_tol > 0:
+        violation_mask[:golden.t_tol] = False
+        violation_mask[len(v) - golden.t_tol:] = False
     violations = int(violation_mask.sum())
-    worst_excess = float(np.maximum(excess, 0.0).max())
+    worst_excess = float(np.maximum(excess, 0.0)[violation_mask].max()) if violations else 0.0
     worst_deviation = float(np.max(np.abs(v - golden.ref)))
     first_violation_s = float(waveform.t[violation_mask][0]) if violations else None
 
@@ -216,5 +235,5 @@ def compare(waveform: Waveform, golden: Golden) -> Comparison:
         violations=violations, worst_excess=worst_excess, worst_deviation=worst_deviation,
         first_violation_s=first_violation_s, passed=(violations == 0),
         t=waveform.t, v=v, ref=golden.ref, lo=golden.lo, hi=golden.hi,
-        violation_mask=violation_mask,
+        violation_mask=violation_mask, ignored_samples=ignored,
     )
