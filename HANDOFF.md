@@ -4,7 +4,8 @@ Updated 2026-10-12, after the move to a new machine. This file is in git and pub
 
 Way of working (the user, 2026-10-12): the agent in this directory is the **project owner**, not the coder.
 It writes a spec per task (`SPEC-*.md` style: files, interfaces, SCPI strings, tests, "done means"), hands
-it to a coder subagent on a faster model that only uses `FakeDhoResource`, reviews the result (diff,
+it to a cheaper, faster subagent that only uses `FakeDhoResource` (Haiku for grunt work: mechanical edits,
+searches, boilerplate tests, running checks; Sonnet for coding against a spec), reviews the result (diff,
 `pytest`, the `--fake` runs, mypy, the rules in `AGENTS.md`) and does the acceptance on the real scope
 itself. The `hortator` skill that used to describe this is not on the new machine.
 
