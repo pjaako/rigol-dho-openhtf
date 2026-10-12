@@ -94,9 +94,10 @@ itself. The `hortator` skill that used to describe this is not on the new machin
 3. **Signal generator** (its CH1 on scope CH1, plain BNC): decode UltraAcquire segments (why 20 480 samples
    per segment, relation to `MAXF`, timestamps) and measure the single-capture loop rate. Done 2026-10-12:
    the golden mask against real defects (README table; SPEC-golden-ends.md fixed the record ends). The
-   generator is driven with bare SCPI over VXI-11 (`C1:BSWV`, `C1:OUTP`); set `LOAD,HZ` when nothing
-   terminates the line. The user's 50 ohm termination at the scope input did not load the signal on
-   2026-10-12 (the scope saw 2x the 50-ohm-load amplitude): check the adapter before relying on it.
+   generator is driven with bare SCPI over VXI-11 (`C1:BSWV`, `C1:OUTP`). The scope input carries a 50 ohm
+   feed-through terminator since 2026-10-12 (the first one was defective and showed 2x the amplitude; the
+   replacement was verified: `LOAD,50` and 0..3 V set gives 3.07 V on the scope, `LOAD,HZ` gives 1.54 V), so
+   use `LOAD,50`. The golden table in README was measured before that, unterminated with `LOAD,HZ`.
    Restore the generator with `LOAD` first, then `BSWV` (an amplitude written under `LOAD,50` doubles when
    the load is switched to HZ afterwards).
 4. `trigger.type` was dropped from the capture file format; it comes back when a second trigger type is needed.
