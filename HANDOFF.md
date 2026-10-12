@@ -1,13 +1,27 @@
 # HANDOFF: rigol-dho-openhtf
 
-Updated 2026-10-05, after the packaging and the restore fix. This file is in git and public since 2026-10-05: no real addresses, serial numbers or private paths in it. Read `AGENTS.md` and `README.md` first; this file is only the moving part.
-The way of working (project owner, coders, acceptance on hardware) is in the `hortator` skill
-(`../hortator/skills/hortator/SKILL.md`).
+Updated 2026-10-12, after the move to a new machine. This file is in git and public since 2026-10-05: no real addresses, serial numbers or private paths in it. Read `AGENTS.md` and `README.md` first; this file is only the moving part.
+
+Way of working (the user, 2026-10-12): the agent in this directory is the **project owner**, not the coder.
+It writes a spec per task (`SPEC-*.md` style: files, interfaces, SCPI strings, tests, "done means"), hands
+it to a coder subagent on a faster model that only uses `FakeDhoResource`, reviews the result (diff,
+`pytest`, the `--fake` runs, mypy, the rules in `AGENTS.md`) and does the acceptance on the real scope
+itself. The `hortator` skill that used to describe this is not on the new machine.
 
 ## State
 
-- `main` = `origin/main` = `829ff0d` (2026-10-05). No other branches. 149 tests,
-  `mypy --strict --follow-imports=silent src/rigol_dho_openhtf/capture.py` clean (run with `uvx mypy`).
+- `main` = `origin/main` = `a450b4d` (2026-10-05). No other branches. 149 tests, example and bench pass
+  with `--fake`, `capture.schema.json` matches `rigol-dho-capture schema`, mypy clean (all re-checked
+  2026-10-12 on the new machine).
+- 2026-10-12: work moved to a new machine (Python 3.13, `uv`), a fresh clone: no `setups/*.bin`, no note
+  from the sibling project, nothing on USB. The scope is reached **over LAN** (raw socket 5555 and VXI-11
+  both open, ~27 ms per query; real address in `SCOPE_HOST`, ask the user). Only `*IDN?`, `:TRIG:STAT?`
+  and `:SYST:ERR?` were sent so far; the scope was in AUTO sweep with an empty error queue. Nothing was
+  saved or changed on it yet.
+- mypy on that machine: plain `uvx mypy` picked Python 3.11 and reported 8 bogus syntax errors on `type`
+  statements; run `uvx --python 3.13 mypy --strict --follow-imports=silent --python-version 3.13 src/rigol_dho_openhtf/capture.py`.
+- `bench_usb.py --fake` overwrites `bench_results/bench.json`, which holds the real measurements of
+  2026-09-27. Restore it with `git checkout -- bench_results/bench.json` after a fake run.
 - The code is the package `src/rigol_dho_openhtf/` (`plug.py`, `capture.py`, `golden.py`,
   `fake_resource.py`), set up with `uv sync --all-extras --dev`. `python capture.py ...` became the command
   `rigol-dho-capture schema|check`. `plug.py` is not strict-clean under mypy (21 errors on 2026-10-05; only `capture.py` is required to be).
