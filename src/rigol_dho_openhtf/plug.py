@@ -86,6 +86,7 @@ class RigolDhoPlug(BasePlug):
     _CHECK_HEADERS = (':TIM:MAIN:SCAL', ':TIM:MAIN:OFFS', ':CHAN1:DISP', ':CHAN1:SCAL', ':CHAN1:OFFS',
                       ':CHAN2:DISP', ':CHAN2:SCAL', ':CHAN2:OFFS')
     _BLOCK_LOAD_ATTEMPTS = 3
+    _RUN_STOP_POLL_S = 2.0   # :RUN after a block took up to 0.5 s to show in :TRIG:STAT?
     """OpenHTF plug wrapping a Rigol DHO scope via PyVISA."""
 
     auto_placeholder = True
@@ -337,24 +338,51 @@ class RigolDhoPlug(BasePlug):
             time.sleep(poll_s)
 
     def get_state(self) -> dict:
+        """Save the setup block, the recording switch, the :WAV settings, read-back values of
+        `_CHECK_HEADERS` and the run/stop state (`'running'`, queried last)."""
         block = self._resource.query_binary_values(
             ':SYST:SET?', datatype='B', container=bytes
         )
         recording = self.query(':REC:WREC:ENAB?') == '1'
         wav = {header: self.query(f'{header}?') for header in self._WAV_HEADERS}
         check = {header: self.query(f'{header}?') for header in self._CHECK_HEADERS}
-        return {'block': block, 'recording': recording, 'wav': wav, 'check': check}
+        running = self.trigger_status() != 'STOP'   # RUN, AUTO, WAIT, TD all count as running
+        return {'block': block, 'recording': recording, 'wav': wav, 'check': check, 'running': running}
 
     def set_state(self, state: dict) -> None:
+        """Restore a state from `get_state()`.
+
+        Order: stale errors, `:RUN`, the setup block (read back and reloaded if dropped), the `:WAV`
+        settings, the recording switch, the run/stop state, errors. A state without `'check'`,
+        `'wav'` or `'running'` (older versions) skips the matching step.
+        """
         self.check_errors()   # stale errors must not be blamed on the restore
-        # Measured: after a :MEAS:ITEM? query followed by any other query the scope drops the block
-        # without an error; a repeated load takes, mostly the first one.
+        # Measured: after a :MEAS:ITEM? query followed by any other query (this check_errors() is
+        # one) the scope drops the next block without an error, and on the raw socket the session
+        # then hangs. Any plain command in between prevents the drop (32 of 32 loads took), so
+        # :RUN goes first. A block saved while running also restarts a scope that was left stopped
+        # by :STOP; after :SING it stays stopped, which step "run/stop" below fixes explicitly.
+        self.write(':RUN')
+        # Still possible: a drop for another reason; a repeated load takes, mostly the first one.
         check = state.get('check', {})
+        timeouts: tuple[type[BaseException], ...] = (TimeoutError,)
+        try:
+            import pyvisa.errors
+            timeouts += (pyvisa.errors.VisaIOError,)
+        except ImportError:   # pyvisa is optional here
+            pass
         for attempt in range(1, self._BLOCK_LOAD_ATTEMPTS + 1):
             self._resource.write_binary_values(
                 ':SYST:SET ', state['block'], datatype='B'
             )
-            not_loaded = [h for h, value in check.items() if self.query(f'{h}?') != value]
+            try:
+                not_loaded = [h for h, value in check.items() if self.query(f'{h}?') != value]
+            except timeouts as exc:
+                # On a raw socket a dropped block leaves the session dead: do not retry.
+                raise RuntimeError(
+                    'set_state: the scope stopped answering after the setup block (a dropped block '
+                    'hangs a raw-socket session); reconnect'
+                ) from exc
             if not not_loaded:
                 break
             self.logger.warning('set_state: setup block not loaded (attempt %d): %s', attempt, not_loaded)
@@ -363,15 +391,18 @@ class RigolDhoPlug(BasePlug):
                 f'set_state: the scope did not load the setup block in {self._BLOCK_LOAD_ATTEMPTS} '
                 f'attempts, still different: {not_loaded}'
             )
+        t_block = time.perf_counter()
         self._wav_setup = None
         # The block does not carry the waveform read settings. They go before the recording
         # switch: written after it, recording was found off again in 2 of 4 restores.
         wav = state.get('wav', {})
-        for header, value in wav.items():
-            self.write(f'{header} {value}')
-        not_restored = [h for h, value in wav.items() if self.query(f'{h}?') != value]
-        if not_restored:
-            raise RuntimeError(f'set_state: not restored: {not_restored}')
+        stopped_path = 'running' in state and not state['running']
+        if not stopped_path:   # the stopped path writes them after :STOP, see _restore_stopped
+            for header, value in wav.items():
+                self.write(f'{header} {value}')
+            not_restored = [h for h, value in wav.items() if self.query(f'{h}?') != value]
+            if not_restored:
+                raise RuntimeError(f'set_state: not restored: {not_restored}')
         # The block does not carry the recording switch either. Measured: about 0.9 s after a
         # block is loaded the scope switches recording off, so switching it on earlier
         # does not last. Wait, set it, then confirm that it stayed.
@@ -385,9 +416,75 @@ class RigolDhoPlug(BasePlug):
             self.write(':REC:WREC:ENAB OFF')
         if self.query(':REC:WREC:ENAB?') != want:
             raise RuntimeError('set_state: recording switch was not restored')
+        # The block carries run/stop only partly (saved stopped: stops; saved running: runs again
+        # after :STOP but stays stopped after :SING), so set it explicitly, last. Measured: after a
+        # block :RUN takes effect late (STOP still 0.2 s later, TD at 0.5 s), hence the polling.
+        if 'running' in state:
+            if state['running']:
+                if self.trigger_status() == 'STOP':
+                    self.write(':RUN')
+                    if not self._wait_status(False):
+                        raise RuntimeError('set_state: the scope did not start running')
+            else:
+                self._restore_stopped(state, t_block)
         errors = self.check_errors()
         if errors:
             raise RuntimeError(f'set_state produced errors: {errors}')
+
+    def _wait_status(self, want_stop: bool) -> bool:
+        """Poll :TRIG:STAT? every 0.1 s for up to `_RUN_STOP_POLL_S`; True once it is (not) STOP as wanted."""
+        deadline = time.perf_counter() + self._RUN_STOP_POLL_S
+        while True:
+            if (self.trigger_status() == 'STOP') == want_stop:
+                return True
+            if time.perf_counter() >= deadline:
+                return False
+            time.sleep(0.1)
+
+    def _restore_stopped(self, state: dict, t_block: float) -> None:
+        """Bring the scope to STOP with the saved settings still in place.
+
+        Measured: a stopped scope clamps the timebase to what its stopped record can show (stopped
+        at 1 ms/div, 2 us/div reads back 4 us/div, no error), and the clamp is applied about 1 s
+        after a block load, so the read-back right after the block cannot see it. At slow
+        timebases it clamps :WAV:STOP to the points acquired so far (100 ms/div: 1000 reads back
+        422, 5 right after a block). Both clamped values persist as the setting. What holds: block,
+        1.5 s, :RUN, rewrite the settings while running, one full sweep, :STOP, then the :WAV
+        settings. Run/stop commands within ~0.5 s of a block land out of order.
+        """
+        check = state.get('check', {})
+        wav = state.get('wav', {})
+        time.sleep(max(0.0, t_block + 1.5 - time.perf_counter()))
+        self.write(':RUN')
+        if not self._wait_status(False):
+            raise RuntimeError('set_state: the scope did not start running')
+        if check:
+            for header, value in check.items():
+                if self.query(f'{header}?') != value:
+                    self.write(f'{header} {value}')   # the scope accepts its own read-back format
+            still_different = [h for h, value in check.items() if self.query(f'{h}?') != value]
+            if still_different:
+                raise RuntimeError(f'set_state: not restored while running: {still_different}')
+        # A stopped record is complete only after a full sweep; the scope clamps :WAV:STOP (fact
+        # above) and the timebase to an incomplete one. The cap keeps tearDown() under ~15 s at very
+        # slow timebases, where the final check below then reports the clamp.
+        timebase = _parse_number(check.get(':TIM:MAIN:SCAL'))
+        sweep_s = 0.5 if timebase is None else min(max(0.5, 12 * timebase), 12.0)
+        time.sleep(sweep_s)
+        self.write(':STOP')
+        if not self._wait_status(True):
+            raise RuntimeError('set_state: the scope did not stop')
+        # After a full sweep and an explicit :STOP the :WAV settings take and hold (3 s later at
+        # 100 ms/div and 500 ms/div); written earlier they were clamped, e.g. :WAV:STOP read 5.
+        for header, value in wav.items():
+            self.write(f'{header} {value}')
+        wanted = {**check, **wav}
+        not_restored = [h for h, value in wanted.items() if self.query(f'{h}?') != value]
+        if not_restored:
+            raise RuntimeError(f'set_state: not restored after :STOP: {not_restored}')
+        # The :WAV writes now come after the recording switch; in steady state they never switched it off.
+        if self.query(':REC:WREC:ENAB?') != ('1' if state['recording'] else '0'):
+            raise RuntimeError('set_state: recording switch was not restored')
 
     def apply_setup(self, setup: dict) -> None:
         """Write and verify a dict of SCPI header -> int/float/bool/str value."""

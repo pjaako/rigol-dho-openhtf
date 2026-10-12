@@ -19,6 +19,13 @@ itself. The `hortator` skill that used to describe this is not on the new machin
   both open, ~27 ms per query; real address in `SCOPE_HOST`, ask the user). Only `*IDN?`, `:TRIG:STAT?`
   and `:SYST:ERR?` were sent so far; the scope was in AUTO sweep with an empty error queue. Nothing was
   saved or changed on it yet.
+- 2026-10-12, later: `set_state()` reworked after the note from the generator project (SPEC-restore-run.md,
+  accepted on the scope over VXI-11 and the raw socket): `:RUN` before the block prevents the drop after a
+  measurement; the run/stop state is saved and restored; stopped states are restored by running one full
+  sweep at the saved settings before `:STOP` (the stopped scope clamps timebase and `:WAV:STOP` to its record);
+  a hung session raises a clear error. 172 tests. Open: the raw socket hangs on ~5 of 70 block loads
+  (README); VXI-11 never did. The generator project's claim "the block is dropped while in STOP" was not
+  reproduced (20 of 20 loads took while stopped); its real case was the measurement before the restore.
 - mypy on that machine: plain `uvx mypy` picked Python 3.11 and reported 8 bogus syntax errors on `type`
   statements; run `uvx --python 3.13 mypy --strict --follow-imports=silent --python-version 3.13 src/rigol_dho_openhtf/capture.py`.
 - `bench_usb.py --fake` overwrites `bench_results/bench.json`, which holds the real measurements of
@@ -45,6 +52,8 @@ itself. The `hortator` skill that used to describe this is not on the new machin
   (2026-10-05): pin `829ff0d`, what the restore check does and its limit.
 - Asked for by that agent and not built (new features, not decided by the user): a helper that writes a
   whole `get_state()` result to a file, and a `measure()` that hides the first `9.9E+37`.
+- Its note of 2026-10-12 (set_state fails in STOP) was read, acted on (SPEC-restore-run.md) and deleted;
+  my answer is `../siglent-sdg-openhtf/NOTE-from-rigol-dho.md` (2026-10-12): re-pin, use VXI-11.
 
 ## Shared resources right now
 
@@ -62,6 +71,12 @@ itself. The `hortator` skill that used to describe this is not on the new machin
 - No model server is running. Ports 4444 (demo) and 8080 (llama-server) are free.
 
 ## Open items, in order
+
+0. **Raw-socket hang on block loads** (README, 2026-10-12): not reproducible on demand, 5 of ~70 loads.
+   Ideas not yet tried: capture the TCP stream of a hanging load (is the block split differently?), a
+   reconnect-and-retry in `set_state()` using `resource.resource_name` (needs the hang to occur during a
+   test to be accepted), USB check of the whole rework (today's acceptance was LAN only, USB is not cabled
+   to this machine).
 
 1. **Published** 2026-09-28: https://github.com/pjaako/rigol-dho-openhtf (public, branch `main`, MIT,
    31 commits by `pjaako` with Claude as co-author). Before the push the history was rewritten: serial

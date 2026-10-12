@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
@@ -550,15 +552,36 @@ def test_set_state_raises_when_a_waveform_setting_does_not_stick():
         p.set_state(state)
 
 
-def test_set_state_loads_the_block_again_when_the_scope_dropped_it_after_a_measurement():
+def test_set_state_loads_the_block_on_the_first_attempt_after_a_measurement():
     fr = FakeDhoResource()
     p = RigolDhoPlug(resource=fr, restore_state=False)
     state = p.get_state()
     p.apply_setup({':TIM:MAIN:SCAL': 2e-4, ':CHAN1:SCAL': 0.5})
-    p.measure('VPP', 1)                    # a measurement and then any query: the fake drops one block
-    p.set_state(state)
+    p.measure('VPP', 1)                    # a measurement and then any query arms a drop in the fake ...
+    p.set_state(state)                     # ... the :RUN before the block disarms it
     assert p.query(':TIM:MAIN:SCAL?') == state['check'][':TIM:MAIN:SCAL']
     assert p.query(':CHAN1:SCAL?') == state['check'][':CHAN1:SCAL']
+    assert fr.log.count(':SYST:SET ') == 1
+
+
+def test_set_state_loads_the_block_again_when_the_block_is_dropped_anyway():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    p.apply_setup({':TIM:MAIN:SCAL': 2e-4})
+    real = fr.write_binary_values
+    dropped = []
+
+    def drop_first(message, values, datatype='B'):
+        if not dropped:                    # a drop for a reason the plug cannot prevent
+            dropped.append(message)
+            fr.log.append(message)
+            return
+        real(message, values, datatype)
+
+    fr.write_binary_values = drop_first
+    p.set_state(state)
+    assert p.query(':TIM:MAIN:SCAL?') == state['check'][':TIM:MAIN:SCAL']
     assert fr.log.count(':SYST:SET ') == 2
 
 
@@ -594,3 +617,282 @@ def test_set_state_accepts_a_state_saved_without_waveform_settings():
     state = p.get_state()
     del state['wav']
     p.set_state(state)                     # must not raise
+
+
+# ── run/stop state and the command before the block ──────────
+
+def test_get_state_has_the_run_state():
+    p = _plug()
+    assert p.get_state()['running'] is True
+    p.stop()
+    assert p.get_state()['running'] is False
+
+
+def test_set_state_writes_run_after_the_error_check_and_before_the_block():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    start = len(fr.log)
+    p.set_state(state)
+    log = fr.log[start:]
+    assert log.index(':SYST:ERR?') < log.index(':RUN') < log.index(':SYST:SET ')
+
+
+def test_fake_hang_mode_hangs_on_a_bare_block_after_a_measurement():
+    fr = FakeDhoResource(block_drop='hang')
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    block = fr.query_binary_values(':SYST:SET?', datatype='B', container=bytes)
+    p.measure('VPP', 1)
+    p.query(':SYST:ERR?')
+    fr.write_binary_values(':SYST:SET ', block, datatype='B')
+    assert fr.hung
+    with pytest.raises(TimeoutError):
+        fr.query('*IDN?')
+    fr.write(':RUN')                       # a raw socket still accepts writes
+
+
+def test_set_state_does_not_hang_the_session_in_hang_mode():
+    fr = FakeDhoResource(block_drop='hang')
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    p.apply_setup({':TIM:MAIN:SCAL': 2e-4})
+    p.measure('VPP', 1)
+    p.set_state(state)
+    assert not fr.hung
+    assert p.query(':TIM:MAIN:SCAL?') == state['check'][':TIM:MAIN:SCAL']
+
+
+def test_set_state_raises_without_retrying_when_the_session_hangs():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    real = p.query
+
+    def hanging(cmd):
+        if cmd.rstrip('?') in state['check']:
+            raise TimeoutError('simulated')
+        return real(cmd)
+
+    p.query = hanging
+    with pytest.raises(RuntimeError, match='stopped answering'):
+        p.set_state(state)
+    assert fr.log.count(':SYST:SET ') == 1
+
+
+def test_set_state_restores_running_after_a_single_capture():
+    p = _plug()
+    state = p.get_state()
+    p.single()
+    p.wait_stopped()
+    p.set_state(state)
+    assert p.trigger_status() != 'STOP'
+
+
+def test_set_state_restores_stopped():
+    p = _plug()
+    p.stop()
+    state = p.get_state()
+    p.run()
+    p.set_state(state)
+    assert p.trigger_status() == 'STOP'
+
+
+def test_teardown_restores_running_after_a_single_capture():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+    p.single()
+    p.wait_stopped()
+    p.tearDown()
+    assert fr.query(':TRIG:STAT?') != 'STOP'
+
+
+def test_teardown_restores_stopped():
+    fr = FakeDhoResource(status='STOP')
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+    p.run()
+    p.tearDown()
+    assert fr.query(':TRIG:STAT?') == 'STOP'
+
+
+def test_set_state_accepts_a_state_saved_without_the_run_state():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    del state['running']
+    start = len(fr.log)
+    p.set_state(state)
+    log = fr.log[start:]
+    assert log.count(':RUN') == 1 and log.index(':RUN') < log.index(':SYST:SET ')
+    assert ':STOP' not in log
+
+
+def test_fake_block_keeps_stop_after_sing_but_not_after_stop():
+    fr = FakeDhoResource()
+    block = fr.query_binary_values(':SYST:SET?', datatype='B', container=bytes)   # saved in RUN
+    fr.write(':SING')
+    assert fr.query(':TRIG:STAT?') == 'WAIT'
+    assert fr.query(':TRIG:STAT?') == 'STOP'
+    fr.write_binary_values(':SYST:SET ', block, datatype='B')
+    assert fr.query(':TRIG:STAT?') == 'STOP'
+    fr.write(':STOP')
+    fr.write_binary_values(':SYST:SET ', block, datatype='B')
+    assert fr.query(':TRIG:STAT?') == 'RUN'
+
+
+def test_fake_block_saved_stopped_stops_a_running_scope():
+    fr = FakeDhoResource(status='STOP')
+    block = fr.query_binary_values(':SYST:SET?', datatype='B', container=bytes)
+    fr.write(':RUN')
+    fr.write_binary_values(':SYST:SET ', block, datatype='B')
+    assert fr.query(':TRIG:STAT?') == 'STOP'
+
+
+def test_fake_rejects_an_unknown_block_drop_mode():
+    with pytest.raises(ValueError):
+        FakeDhoResource(block_drop='explode')
+
+
+# ── stopped record: timebase clamp and the stopped restore ───
+
+def test_fake_stopped_scope_clamps_the_timebase_and_keeps_it_after_run():
+    fr = FakeDhoResource()
+    fr.write(':TIM:MAIN:SCAL 1E-3')
+    fr.write(':STOP')
+    fr.write(':TIM:MAIN:SCAL 2E-6')
+    assert fr.query(':TIM:MAIN:SCAL?') == '4.000000E-6'
+    fr.write(':RUN')
+    assert fr.query(':TIM:MAIN:SCAL?') == '4.000000E-6'
+    fr.write(':TIM:MAIN:SCAL 2E-6')
+    assert fr.query(':TIM:MAIN:SCAL?') == '2.000000E-6'
+
+
+def test_fake_block_saved_stopped_is_clamped_at_the_next_write():
+    fr = FakeDhoResource()
+    fr.write(':TIM:MAIN:SCAL 2E-6')
+    fr.write(':STOP')
+    block = fr.query_binary_values(':SYST:SET?', datatype='B', container=bytes)
+    fr.write(':RUN')
+    fr.write(':TIM:MAIN:SCAL 1E-3')
+    fr.write_binary_values(':SYST:SET ', block, datatype='B')
+    assert fr.query(':TIM:MAIN:SCAL?') == '2.000000E-6'   # the check right after the load sees nothing
+    fr.write('*CLS')
+    assert fr.query(':TIM:MAIN:SCAL?') == '4.000000E-6'
+
+
+def _stopped_state_at_2us(p):
+    p.run()
+    p.apply_setup({':TIM:MAIN:SCAL': 2e-6})
+    p.stop()
+    return p.get_state()
+
+
+def test_set_state_restores_a_stopped_state_despite_the_record_clamp():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = _stopped_state_at_2us(p)
+    p.run()
+    p.apply_setup({':TIM:MAIN:SCAL': 1e-3})
+    p.measure('VPP', 1)
+    start = len(fr.log)
+    p.set_state(state)
+    assert p.trigger_status() == 'STOP'
+    assert p.query(':TIM:MAIN:SCAL?') == '2.000000E-6'
+    log = fr.log[start:]
+    block = log.index(':SYST:SET ')
+    assert log.index(':RUN', block) < log.index(':TIM:MAIN:SCAL 2.000000E-6') < log.index(':STOP', block)
+
+
+def test_teardown_restores_a_stopped_state_despite_the_record_clamp():
+    fr = FakeDhoResource()
+    fr.write(':TIM:MAIN:SCAL 2E-6')
+    fr.write(':STOP')
+    p = RigolDhoPlug(resource=fr, restore_state=True)
+    p.run()
+    p.apply_setup({':TIM:MAIN:SCAL': 1e-3})
+    p.measure('VPP', 1)
+    p.tearDown()
+    assert fr.query(':TRIG:STAT?') == 'STOP'
+    assert fr.query(':TIM:MAIN:SCAL?') == '2.000000E-6'
+
+
+def test_set_state_raises_when_the_scope_never_starts_running():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = p.get_state()
+    p.stop()
+    real = p.query
+    p.query = lambda cmd: 'STOP' if cmd == ':TRIG:STAT?' else real(cmd)
+    t0 = time.perf_counter()
+    with pytest.raises(RuntimeError, match='did not start running'):
+        p.set_state(state)
+    assert time.perf_counter() - t0 < 4.5   # 2 s polling after the :RUN
+
+
+# ── slow sweep: the :WAV settings go after :STOP ─────────────
+
+def test_fake_clamps_wav_stop_during_a_slow_sweep_until_an_explicit_stop():
+    fr = FakeDhoResource()
+    fr.write(':TIM:MAIN:SCAL 1E-1')
+    fr.write(':WAV:STOP 1000')
+    assert fr.query(':WAV:STOP?') == '5'
+    fr.write(':STOP')
+    fr.write(':WAV:STOP 1000')
+    assert fr.query(':WAV:STOP?') == '1000'
+    fr.write(':RUN')
+    fr.write(':TIM:MAIN:SCAL 2E-6')
+    fr.write(':WAV:STOP 1000')
+    assert fr.query(':WAV:STOP?') == '1000'
+
+
+def _stopped_slow_state(p, recording=False):
+    p.run()
+    p.apply_setup({':TIM:MAIN:SCAL': 1e-1})
+    p.stop()
+    p.write(':WAV:STOP 1000')
+    if recording:
+        p.write(':REC:WREC:ENAB ON')
+    return p.get_state()
+
+
+def test_set_state_restores_a_stopped_state_at_a_slow_timebase():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = _stopped_slow_state(p)
+    p.run()
+    p.apply_setup({':TIM:MAIN:SCAL': 1e-3})
+    p.write(':WAV:STOP 1')
+    p.measure('VPP', 1)
+    start = len(fr.log)
+    p.set_state(state)
+    assert p.trigger_status() == 'STOP'
+    assert p.query(':TIM:MAIN:SCAL?') == '1.000000E-1'
+    assert p.query(':WAV:STOP?') == '1000'
+    log = fr.log[start:]
+    last_stop = len(log) - 1 - log[::-1].index(':STOP')
+    last_wav = len(log) - 1 - log[::-1].index(':WAV:STOP 1000')
+    assert last_stop < last_wav
+    block = log.index(':SYST:SET ')
+    assert not any(c.startswith(':WAV:') and c.endswith(' 1000') or c.startswith(':WAV:') and ' ' in c
+                   for c in log[block:last_stop])
+
+
+def test_set_state_restores_recording_and_wav_on_the_stopped_path():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = _stopped_slow_state(p, recording=True)
+    p.run()
+    p.write(':WAV:STOP 1')
+    p.set_state(state)
+    assert p.query(':REC:WREC:ENAB?') == '1'
+    assert p.query(':WAV:STOP?') == '1000'
+    assert p.trigger_status() == 'STOP'
+
+
+def test_set_state_raises_when_a_wav_setting_stays_clamped_after_stop():
+    fr = FakeDhoResource()
+    p = RigolDhoPlug(resource=fr, restore_state=False)
+    state = _stopped_slow_state(p)
+    real = p.query
+    p.query = lambda cmd: '5' if cmd == ':WAV:STOP?' else real(cmd)
+    with pytest.raises(RuntimeError, match='not restored after :STOP'):
+        p.set_state(state)

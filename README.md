@@ -37,7 +37,7 @@ def phase(test, scope):
 | `write_checked(cmd)` | `write()` then `check_errors()`, raises on any error |
 | `reset()` | `*RST`, waits, drains errors; never sends `*OPC?` (always `0` on this firmware) |
 | `wait_stopped(timeout_s=10.0)` | polls `trigger_status()` until `STOP` |
-| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag, the `:WAV` read settings and eight settings read back to check that the block was loaded |
+| `get_state()` / `set_state(state)` | full setup block (`:SYST:SET?`) plus the recording flag, the `:WAV` read settings, the run/stop state and eight settings read back to check that the block was loaded |
 | `screenshot(path=None)` | the scope screen as PNG bytes (`:DISP:DATA? PNG`); also written to `path` if given; `RuntimeError` if the answer is not a complete PNG |
 | `apply_setup(setup)` | writes and verifies every item; raises `RuntimeError` naming every failure |
 
@@ -114,7 +114,9 @@ No code differs from USB; PyVISA provides all three transports.
 - Ethernet tops out at 6-7 MiB/s, about half of what the 100 Mbit/s link could carry and 1.8x slower than
   USB. USB is the fastest transport for this scope; Ethernet's advantages are cable length, galvanic
   isolation and sharing.
-- Raw socket is ~10 % faster than VXI-11 on large transfers, equal otherwise.
+- Raw socket is ~10 % faster than VXI-11 on large transfers, equal otherwise. But some setup-block
+  loads hang a raw-socket session (see "Things the manual does not tell you"): prefer VXI-11 when the
+  plug restores the scope's state, which it does by default.
 - Check the negotiated link speed (`cat /sys/class/net/<if>/speed`). A bad cable negotiated 10 Mbit/s and
   capped transfers at 1 MiB/s (10 M points WORD in 18 s).
 - Static addressing over SCPI: `:LAN:MAN ON`, then `:LAN:AUT OFF` (rejected while manual mode is off),
@@ -181,6 +183,38 @@ for all, if scale, offset and timebase did not change).
   9 of them needed one extra load (0.15 s), none needed two; recording on and the `:WAV` settings still
   held 5 s later. A dropped load is all or nothing, so one changed setting among the eight reveals it; a test
   that changes none of them is not covered.
+- **On the raw socket a dropped block hangs the session** (measured 2026-10-12, `::5555::SOCKET`): the
+  first query after the dropped block never answers (8 of 8, scope stopped or running); the scope is fine
+  and a new connection answers at once. Over VXI-11 and USB the same drop is silent. **Any plain command
+  written between the queries and the block prevents the drop**: `:RUN`, `:STOP`, `:CHAN1:DISP 1` and
+  `*CLS` each gave first-attempt loads 4 of 4, stopped and running (32 of 32). Waiting does not help and
+  queries are the trigger. `set_state()` therefore writes `:RUN` before the block (and `check_errors()`,
+  its own query, before that); the retry loop stays for drops of other causes, and a timeout after the
+  block becomes `RuntimeError('... stopped answering ...')` without a retry, since the session is dead.
+  Being stopped does not drop blocks: after `:STOP`, after `:SING` + `STOP`, after RAW reads of 10k or
+  100k points, 20 of 20 loads took (both transports).
+- The block carries the run/stop state only partly: saved stopped and loaded while running, the scope
+  stops; saved running and loaded after `:STOP`, it runs again; saved running and loaded after `:SING`
+  and `STOP`, it **stays stopped** (6 of 6). `get_state()` records `running` and `set_state()` restores it
+  explicitly. After a block, `:RUN` takes effect late (`:TRIG:STAT?` still `STOP` 0.2 s later, `TD` at
+  0.5 s), and run/stop commands within ~0.5 s of a block land out of order; the plug polls for up to 2 s.
+- **A stopped scope clamps settings to its stopped record.** Stopped at 1 ms/div, `:TIM:MAIN:SCAL 2E-6`
+  reads back `4.000000E-6`, no error; a block saved stopped at 2 us/div and loaded while running at
+  1 ms/div reads back `2.000000E-6` right after the load and `4.000000E-6` about 1 s later, and the
+  clamped value then persists as the setting even after `:RUN`. At slow timebases `:WAV:STOP` is clamped
+  to the points acquired so far (`422` while running at 100 ms/div, `5` right after a block). A slower
+  saved timebase is not clamped. So `set_state()` restores a stopped state as: block, 1.5 s, `:RUN`, the
+  eight settings rewritten while running, one full sweep (12 x timebase, at least 0.5 s, at most 12 s),
+  `:STOP`, then the `:WAV` settings, and reads everything back. Held 5 s later at 2 us/div and 3 s later
+  at 100 and 500 ms/div. The stopped record itself cannot be restored: the scope shows a new acquisition.
+- **Open: the raw socket hangs on some block loads even with `:RUN` written first.** On 2026-10-12,
+  5 of roughly 70 `:SYST:SET` loads over `::5555::SOCKET` never got an answer to the next query (3 of 12
+  restores of a stopped 100 ms/div state, and twice the first block load of a new process); 0 of about
+  40 over VXI-11. The scope kept answering queries on new connections, one further block load from a
+  fresh session hung ~15 s later, and loads worked again within ~25 s. Not reproducible on demand. The
+  plug raises `RuntimeError('... stopped answering ...')`, `tearDown()` logs it and the scope stays
+  unrestored. **Use VXI-11 (`TCPIP::<addr>::INSTR`) for tests that rely on the restore**; the raw
+  socket's only gain is ~10 % on transfers of 10 M points and more.
 - Do not verify a restore by comparing setup blocks. Measured 2026-10-05 over USB: after `*RST`, a capture
   setup and `set_state()`, the block read by `:SYST:SET?` had the same length as the saved one (2803 bytes)
   but was not byte-identical, while timebase, channel scale and offset, trigger sweep, recording and the
@@ -199,6 +233,9 @@ for all, if scale, offset and timebase did not change).
 | `apply_setup()` of 15 settings | 1.8 s (two queries per setting) |
 | `tearDown()` with state restore, recording was on | 1.6 s |
 | `tearDown()` with state restore, recording was off | 0.5 s |
+| `tearDown()` with state restore (2026-10-12), scope was running | 1.2 s (recording on: 2.8 s) |
+| `tearDown()` with state restore, scope was stopped at 2 us/div | 3.3 s (recording on: 3.4 s) |
+| `tearDown()` with state restore, scope was stopped at 100 ms/div / 500 ms/div | 4.1 s / 8.6 s (one full sweep is waited, capped at 12 s) |
 
 - A value the scope clamps (`:TIM:MAIN:SCAL 5000` becomes 500) is reported through the read-back, without
   any error from the scope. A bad value (`:CHAN1:COUP XYZ`) gives `-222,"Data out of range"`.

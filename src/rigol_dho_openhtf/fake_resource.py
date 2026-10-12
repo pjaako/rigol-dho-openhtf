@@ -83,6 +83,10 @@ _MID_CODE = {'BYTE': 128, 'WORD': 32768}
 _MAX_CODE = {'BYTE': 255, 'WORD': 65535}
 _DEFECTS = (None, 'shift', 'gain', 'glitch')
 _SIGNALS = (None, 'clock')
+_RECORD_FLOOR_DIV = 250   # one data point: 1 ms/div record, 4 us/div floor
+_SLOW_SWEEP_S = 0.05   # s/div from which the sweep is slow: the scope clamps :WAV:STOP to the points so far
+_SLOW_SWEEP_STOP = 5
+_BLOCK_DROPS = ('silent', 'hang')   # a dropped setup block: nothing happens / the raw-socket session hangs
 
 
 def _png_chunk(kind: bytes, body: bytes) -> bytes:
@@ -106,7 +110,8 @@ class FakeDhoResource:
 
     def __init__(self, status: str = 'RUN', memory_depth: int = 10000,
                  reject: dict[str, str] | None = None, defect: str | None = None,
-                 signal: str | None = None, screen: bytes | None = None):
+                 signal: str | None = None, screen: bytes | None = None,
+                 block_drop: str = 'silent'):
         self.timeout = 10000
         self.chunk_size = 1024 * 1024
         self.read_termination = '\n'
@@ -116,6 +121,8 @@ class FakeDhoResource:
 
         if defect not in _DEFECTS:
             raise ValueError(f'defect must be one of {_DEFECTS}, got {defect!r}')
+        if block_drop not in _BLOCK_DROPS:
+            raise ValueError(f'block_drop must be one of {_BLOCK_DROPS}, got {block_drop!r}')
         if signal not in _SIGNALS:
             raise ValueError(f'signal must be one of {_SIGNALS}, got {signal!r}')
 
@@ -143,6 +150,33 @@ class FakeDhoResource:
         # the next setup block is dropped without an error; a repeated load takes.
         self._measured = False
         self._drop_block = False
+        # Measured 2026-10-12: over the raw socket the first query after a dropped block never answers.
+        self._block_drop = block_drop
+        self._hung = False
+        # A block saved running does not restart a scope stopped by :SING (it does after :STOP).
+        self._stopped_by_sing = False
+        # Measured 2026-10-12: a stopped scope clamps the timebase to what its stopped record can show
+        # (stopped at 1 ms/div, 2 us/div reads back 4 us/div), and after a block it does so ~1 s late.
+        self._record_scale = DEFAULTS[':TIM:MAIN:SCAL']   # timebase of the last acquisition
+        self._clamp_pending = False
+        self._block_stopped = False   # stopped by a block load (the sweep restarted), not by :STOP
+
+    def _timebase(self) -> float:
+        raw = self._settings.get(':TIM:MAIN:SCAL')
+        return float(DEFAULTS[':TIM:MAIN:SCAL'] if raw is None else _format_written(raw))
+
+    def _clamp_timebase(self) -> None:
+        floor = self._record_scale / _RECORD_FLOOR_DIV
+        if self._timebase() < floor:
+            self._settings[':TIM:MAIN:SCAL'] = f'{floor:.6E}'
+
+    @property
+    def hung(self) -> bool:
+        return self._hung
+
+    def _check_hung(self) -> None:
+        if self._hung:
+            raise TimeoutError('FakeDhoResource: session hung after a dropped setup block')
 
     def _waveform_samples(self, idx: np.ndarray, fmt: str) -> np.ndarray:
         """Sample codes for absolute sample indices `idx` (0-based), fmt 'BYTE' or 'WORD'.
@@ -173,6 +207,13 @@ class FakeDhoResource:
     def write(self, cmd: str) -> None:
         self.log.append(cmd)
         cmd = cmd.strip()
+        if self._clamp_pending:   # the real scope applies it ~1 s after the block
+            self._clamp_pending = False
+            if self._status == 'STOP':
+                self._clamp_timebase()
+
+        # Measured 2026-10-12: any plain command between the queries and the block prevents the drop.
+        self._measured = self._drop_block = False
 
         header = cmd.split(None, 1)[0] if cmd else ''
         if header.startswith(':WAV:') and self._recording_fragile:
@@ -192,12 +233,26 @@ class FakeDhoResource:
             self._wav_star = 1
             self._wav_stop = 1
             self._sing_wait_count = 0
+            self._stopped_by_sing = False
+            self._block_stopped = False
+            self._record_scale = self._timebase()
         elif cmd == ':RUN':
             self._status = 'RUN'
+            self._block_stopped = False
+            self._stopped_by_sing = False
+            self._record_scale = self._timebase()
         elif cmd == ':STOP':
             self._status = 'STOP'
+            self._block_stopped = False
+            # Steady state: the plug's stopped path writes :WAV after the sweep, the recording switch
+            # and :STOP, and README says that does not switch recording off (the fragile window
+            # after a block is over).
+            self._recording_fragile = False
+            self._stopped_by_sing = False
         elif cmd == ':SING':
             self._status = 'WAIT'
+            self._stopped_by_sing = True
+            self._record_scale = self._timebase()
             self._sing_wait_count = 0
         elif cmd.startswith(':REC:WREC:ENAB '):
             self._recording = cmd.split()[1].upper() in ('ON', '1')
@@ -222,16 +277,26 @@ class FakeDhoResource:
             self._wav_star = int(cmd.split()[1])
         elif cmd.startswith(':WAV:STOP '):
             self._wav_stop = int(cmd.split()[1])
+            # Measured 2026-10-12: at slow timebases the scope clamps it to the points acquired so far
+            # (5 right after a block) until a full sweep and an explicit :STOP; modelled as 5.
+            if self._timebase() >= _SLOW_SWEEP_S and (self._status != 'STOP' or self._block_stopped):
+                self._wav_stop = _SLOW_SWEEP_STOP
         else:
             parts = cmd.split(None, 1)
             if len(parts) == 2:
                 if parts[0] in DEFAULTS:
                     self._settings[parts[0]] = parts[1]
+                    if parts[0] == ':TIM:MAIN:SCAL':
+                        if self._status == 'STOP':
+                            self._clamp_timebase()
+                        else:
+                            self._record_scale = self._timebase()
                 else:   # the real scope rejects a header it does not know and never answers its query
                     self._error_queue.append('-100,"Command err"')
 
     def query(self, cmd: str) -> str:
         self.log.append(cmd)
+        self._check_hung()
         cmd = cmd.strip()
         if cmd.startswith(':MEAS:ITEM?'):
             self._measured = True
@@ -293,15 +358,24 @@ class FakeDhoResource:
         if cmd.endswith('?'):
             header = cmd[:-1]
             if header in self._settings:
-                return _format_written(self._settings[header])
-            if header in DEFAULTS:
-                return _format_default(DEFAULTS[header])
+                text = _format_written(self._settings[header])
+            elif header in DEFAULTS:
+                text = _format_default(DEFAULTS[header])
+            else:
+                text = None
+            if text is not None:
+                if header == ':TIM:MAIN:SCAL':   # the real scope prints 2.000000E-6, not E-06
+                    mantissa, _, exp = text.partition('E')
+                    if exp:
+                        text = f'{mantissa}E{int(exp)}'
+                return text
 
         raise ValueError(f'Unknown query: {cmd}')
 
     def query_binary_values(self, cmd: str, datatype: str, is_big_endian: bool = False,
                              container=list):
         self.log.append(cmd)
+        self._check_hung()
         if cmd == ':SYST:SET?':
             blob = {
                 'settings': dict(self._settings),
@@ -329,16 +403,27 @@ class FakeDhoResource:
             raise ValueError(f'Unexpected binary write: {message}')
         dropped, self._measured, self._drop_block = self._drop_block, False, False
         if dropped:
+            self._hung = self._block_drop == 'hang'
             return
         blob = pickle.loads(bytes(values))
         self._settings = dict(blob['settings'])
         self._memory_depth = blob['memory_depth']
-        self._status = blob['status']
+        # Measured: saved stopped -> stops; saved running -> runs, except that a scope stopped by
+        # :SING stays stopped.
+        if blob['status'] == 'STOP' or (self._status == 'STOP' and self._stopped_by_sing):
+            self._status = 'STOP'
+        else:
+            self._status = 'RUN'
+            self._stopped_by_sing = False
+            self._record_scale = self._timebase()
+        self._clamp_pending = self._status == 'STOP'
+        self._block_stopped = self._status == 'STOP'
         self._recording = False  # the setup block does not restore recording, like the real scope
         self._block_loaded = True
 
     def close(self) -> None:
         self.closed = True
+        self._hung = False
 
     def set_status(self, status: str) -> None:
         """Helper for tests to change trigger status."""
